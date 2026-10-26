@@ -13,6 +13,8 @@ namespace FetchXmlLinter.XrmToolBox
     [ExportMetadata("BackgroundColor", "#EAF3FB")]
     [ExportMetadata("PrimaryFontColor", "#164B78")]
     [ExportMetadata("SecondaryFontColor", "#334155")]
+    [ExportMetadata("SmallImageBase64", "")]
+    [ExportMetadata("BigImageBase64", "")]
     public sealed class Plugin : PluginBase
     {
         static Plugin() => AppDomain.CurrentDomain.AssemblyResolve += ResolveCore;

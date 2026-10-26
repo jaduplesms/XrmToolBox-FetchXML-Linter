@@ -43,9 +43,15 @@ This builds the solution, runs the tests and disconnected host check, then
 creates an **unpublished** alpha package under `artifacts`.
 For a development installation, close XrmToolBox and copy only
 `src\FetchXmlLinter.XrmToolBox\bin\Release\net48\FetchXmlLinter.XrmToolBox.dll`
-into its `Plugins` directory. Use XrmToolBox 1.2025.10.74 or later with an
+into the active **data directory's** `Plugins` folder, normally
+`%APPDATA%\MscrmTools\XrmToolBox\Plugins` (not a new folder beside the EXE).
+An `/overridepath` launch argument changes that data directory.
+Use XrmToolBox 1.2025.10.74 or later with an
 OAuth connection for connected workflows. Do not copy development-output host
 DLLs into an existing installation. The core is embedded in the plugin DLL.
+Development rebuilds must increment `AssemblyVersion` when replacing an
+already-scanned DLL: XrmToolBox caches tool discovery by filename and assembly
+version. Do not delete the user's tool manifest to force discovery.
 
 Start disconnected with `examples\manual-fetch.xml`. Offline metadata checks
 will be explicitly incomplete. Connected collection requires appropriate
