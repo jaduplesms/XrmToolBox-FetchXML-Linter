@@ -59,13 +59,27 @@ try {
     }
     $tabs = @($all | Where-Object { $_ -is [System.Windows.Forms.TabControl] })[0]
     if ($tabs.TabPages.Count -ne 4) { throw 'Expected all four input workflows.' }
+    $requests = [Collections.Generic.List[object]]::new()
+    $control.add_OnRequestConnection([EventHandler] {
+        param($sender, $eventArgs)
+        $requests.Add($eventArgs)
+    })
+    $tabs.SelectedIndex = 1
+    [System.Windows.Forms.Application]::DoEvents()
+    $search = @($all | Where-Object AccessibleName -eq 'User name prefix or Dataverse user ID')[0]
+    $search.Text = 'JA'
+    $find = $control.GetType().GetMethod('FindUsers', [Reflection.BindingFlags]'Instance,NonPublic')
+    $find.Invoke($control, $null)
+    if ($requests.Count -ne 1 -or $requests[0].ActionName -ne 'Recaller') {
+        throw 'User search did not request a connection with a replayable callback.'
+    }
     $tabs.SelectedIndex = 3
     [System.Windows.Forms.Application]::DoEvents()
     $kql = @($all | Where-Object AccessibleName -eq 'KQL template')[0]
     if ($kql.Text -notmatch 'SchemaVersion') { throw 'The embedded KQL template did not load.' }
     $form.Size = [System.Drawing.Size]::new(850, 650)
     [System.Windows.Forms.Application]::DoEvents()
-    Write-Output 'Host check passed: disconnected lint, embedded core, input tabs, KQL resource, resize and disposal.'
+    Write-Output 'Host check passed: disconnected lint, embedded core, input tabs, connection callback, KQL resource, resize and disposal.'
 }
 finally {
     if ($form) { $form.Dispose() }

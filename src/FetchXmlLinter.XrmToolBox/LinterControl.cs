@@ -177,7 +177,7 @@ namespace FetchXmlLinter.XrmToolBox
             var first = new Linter().Analyze(source, layoutXml: suppliedLayout);
             if (connectedMetadata.Checked && first.Status != AnalysisStatus.Invalid)
             {
-                ExecuteMethod(() => Connected(reader =>
+                ExecuteWithConnection(() => Connected(reader =>
                 {
                     var errors = new List<string>();
                     var metadata = reader.GetMetadata(first.Tables, errors);
@@ -194,7 +194,7 @@ namespace FetchXmlLinter.XrmToolBox
         {
             var term = search.Text.Trim();
             if (term.Length < 2) throw new InvalidOperationException("Enter at least two name-prefix characters or a Dataverse user GUID.");
-            ExecuteMethod(() => Connected(reader => reader.FindUsers(term), found =>
+            ExecuteWithConnection(() => Connected(reader => reader.FindUsers(term), found =>
             {
                 users.Items.Clear();
                 users.Items.AddRange(found.Cast<object>().ToArray());
@@ -206,7 +206,7 @@ namespace FetchXmlLinter.XrmToolBox
         {
             var selected = users.CheckedItems.Cast<UserTarget>().ToList();
             if (selected.Count == 0) throw new InvalidOperationException("Check at least one user.");
-            ExecuteMethod(() => Connected(reader => reader.Collect(selected), PresentCollection));
+            ExecuteWithConnection(() => Connected(reader => reader.Collect(selected), PresentCollection));
         }
 
         private void PresentCollection(CollectionResult collected)
@@ -228,7 +228,7 @@ namespace FetchXmlLinter.XrmToolBox
         {
             var selected = views.CheckedItems.Cast<ViewSource>().ToList();
             if (selected.Count == 0) throw new InvalidOperationException("Check individual views or explicitly check the collected set.");
-            ExecuteMethod(() => Connected(reader =>
+            ExecuteWithConnection(() => Connected(reader =>
             {
                 var linter = new Linter();
                 var tables = selected.SelectMany(v => linter.Analyze(v.Xml).Tables).Distinct().ToList();
@@ -264,7 +264,7 @@ namespace FetchXmlLinter.XrmToolBox
             {
                 if (dialog.ShowDialog(this) != DialogResult.OK) return;
                 var csv = ReadBounded(dialog.FileName, ShortlistCsv.MaximumCharacters);
-                ExecuteMethod(() => Connected(reader => ShortlistCsv.Read(csv, reader.OrganizationId()), imported =>
+                ExecuteWithConnection(() => Connected(reader => ShortlistCsv.Read(csv, reader.OrganizationId()), imported =>
                 {
                     shortlist.Items.Clear();
                     shortlist.Items.AddRange(imported.Candidates.Cast<object>().ToArray());
@@ -279,7 +279,7 @@ namespace FetchXmlLinter.XrmToolBox
         {
             var candidates = shortlist.CheckedItems.Cast<Candidate>().ToList();
             if (candidates.Count == 0) throw new InvalidOperationException("Check validated candidate rows first.");
-            ExecuteMethod(() => Connected(reader =>
+            ExecuteWithConnection(() => Connected(reader =>
             {
                 var organization = reader.OrganizationId();
                 if (candidates.Any(c => c.OrganizationId != organization))
@@ -310,6 +310,9 @@ namespace FetchXmlLinter.XrmToolBox
                 return collected;
             }, PresentCollection));
         }
+
+        internal void ExecuteWithConnection(System.Action action) =>
+            ExecuteMethod(callback => callback.ExternalAction(), new ExternalMethodCallerInfo(action));
 
         private void Connected<T>(Func<DataverseReader, T> work, Action<T> apply)
         {
