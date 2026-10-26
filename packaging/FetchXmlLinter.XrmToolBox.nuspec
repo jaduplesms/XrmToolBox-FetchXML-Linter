@@ -1,0 +1,26 @@
+<?xml version="1.0"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd">
+  <metadata>
+    <id>FetchXmlLinter.XrmToolBox</id>
+    <version>$version$</version>
+    <title>FetchXML Linter</title>
+    <authors>jaduplesms</authors>
+    <license type="expression">MIT</license>
+    <readme>docs/README.md</readme>
+    <projectUrl>https://github.com/jaduplesms/XrmToolBox-FetchXML-Linter</projectUrl>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <description>Deterministic, read-only FetchXML analysis for manual input and authorized personal-view review. Private development alpha; not a performance benchmark or automatic optimizer.</description>
+    <releaseNotes>Initial development alpha. Live collection and telemetry-export acceptance, visual assets and distribution review remain preview gates.</releaseNotes>
+    <tags>XrmToolBox FetchXML Linter Dataverse PersonalViews</tags>
+    <dependencies>
+      <group targetFramework="net48">
+        <dependency id="XrmToolBox" version="1.2025.10.74" />
+      </group>
+    </dependencies>
+  </metadata>
+  <files>
+    <file src="src\FetchXmlLinter.XrmToolBox\bin\$configuration$\net48\FetchXmlLinter.XrmToolBox.dll" target="lib\net48\Plugins" />
+    <file src="README.md" target="docs" />
+    <file src="LICENSE" target="docs\LICENSE" />
+  </files>
+</package>

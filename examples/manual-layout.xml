@@ -1,0 +1,6 @@
+<grid>
+  <row>
+    <cell name="name" />
+    <cell name="description" />
+  </row>
+</grid>

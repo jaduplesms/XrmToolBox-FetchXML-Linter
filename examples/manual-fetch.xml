@@ -1,0 +1,9 @@
+<fetch>
+  <entity name="account">
+    <attribute name="name" />
+    <attribute name="description" />
+    <filter>
+      <condition attribute="name" operator="like" value="%synthetic%" />
+    </filter>
+  </entity>
+</fetch>

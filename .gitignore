@@ -1,0 +1,15 @@
+**/bin/
+**/obj/
+.vs/
+TestResults/
+artifacts/
+*.user
+*.suo
+*.nupkg
+*.snupkg
+private/
+exports/
+.env
+*.token
+*.pfx
+*.snk
