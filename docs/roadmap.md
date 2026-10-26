@@ -6,7 +6,7 @@ until preview**; no automatic visibility change or publication.
 
 | Milestone | Scope | Current evidence / exit gate |
 | --- | --- | --- |
-| M0 - Foundation | Repository, contracts, architecture, backlog, CI | Repository and source baseline created; CI must pass remotely |
+| M0 - Foundation | Repository, contracts, architecture, backlog, CI | Source baseline persisted privately; clean Windows CI passed |
 | M1 - Manual linter | Independent deterministic engine, manual XML, evidence/results | Synthetic rule/parser/CSV tests and disconnected host check; no runtime-performance claims |
 | M2 - Personal views | Verified isolated impersonation, paging, selection, metadata, cancellation | Fake-service coverage exists; real OAuth XrmToolBox collection, connection switch and cancellation acceptance still required |
 | M3 - Telemetry handoff | KQL templates, typed CSV preview/import and result exports | Synthetic importer coverage exists; authorized live export/import and UI acceptance still required |
@@ -14,7 +14,7 @@ until preview**; no automatic visibility change or publication.
 
 ## Preview checklist
 
-- [ ] CI runs successfully from a clean Windows runner.
+- [x] CI runs successfully from a clean Windows runner.
 - [ ] Install only the plugin DLL/package in a clean supported XrmToolBox.
 - [ ] Verify offline manual flow, resizing, accessibility and export rendering.
 - [ ] Verify selected-user and selected-view collection with real OAuth.
@@ -34,3 +34,7 @@ until preview**; no automatic visibility change or publication.
 No direct Azure authentication, saved-view writes, rewritten XML, query
 execution, benchmarking or agentic functionality is scheduled for v1.
 GitHub milestones/issues track the remaining acceptance work, not guaranteed dates.
+
+Initial alpha evidence: commit `f9108dd`; the [clean Windows build](https://github.com/jaduplesms/XrmToolBox-FetchXML-Linter/actions/runs/40353835484)
+completed the automated tests, disconnected host check and unpublished package
+creation. This is not evidence of live connected acceptance.
