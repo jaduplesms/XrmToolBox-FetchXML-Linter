@@ -10,7 +10,7 @@
     <projectUrl>https://github.com/jaduplesms/XrmToolBox-FetchXML-Linter</projectUrl>
     <requireLicenseAcceptance>false</requireLicenseAcceptance>
     <description>Deterministic, read-only FetchXML analysis for manual input and authorized personal-view review. Private development alpha; not a performance benchmark or automatic optimizer.</description>
-    <releaseNotes>Initial development alpha. Live collection and telemetry-export acceptance, visual assets and distribution review remain preview gates.</releaseNotes>
+    <releaseNotes>Development alpha with indented, syntax-coloured FetchXML/Layout XML and undoable local formatting, numbered workflow navigation, independently scrolling selectors, a default 60/40 input/results split, explicit checked-view XML opening, contextual tooltips and cancellable modal progress. Live collection, telemetry-export acceptance and distribution review remain preview gates.</releaseNotes>
     <tags>XrmToolBox FetchXML Linter Dataverse PersonalViews</tags>
     <dependencies>
       <group targetFramework="net48">

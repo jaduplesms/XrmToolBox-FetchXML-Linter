@@ -9,7 +9,30 @@ public class ShortlistTests
     private static readonly Guid Organization = Guid.Parse("11111111-1111-1111-1111-111111111111");
     private const string User = "22222222-2222-2222-2222-222222222222";
     private static string Row(string userType = "DataverseSystemUserId", string view = "", string attribution = "UserTableCandidate") =>
-        "1," + Organization + "," + User + "," + userType + "," + view + "," + attribution + ",account,,,,,";
+        "1," + User + "," + userType + "," + view + "," + attribution + ",account,,,,,";
+
+    [Theory]
+    [InlineData("DataverseSystemUserId", "33333333-3333-3333-3333-333333333333", "ExactViewMarker")]
+    [InlineData("EntraObjectId", "", "UserTableCandidate")]
+    public void BindsOrganizationFreeCandidatesToActiveConnection(string type, string view, string attribution)
+    {
+        const string header = "SchemaVersion,UserId,UserIdType,ViewId,Attribution,EntityName,WindowStartUtc,WindowEndUtc,SampleCount,P95Ms,MetricKind";
+        var row = Row(type, view, attribution);
+        var shortlist = ShortlistCsv.Read(header + "\n" + row + "\n" + row, Organization);
+
+        Assert.Empty(shortlist.Errors);
+        Assert.Equal(Organization, Assert.Single(shortlist.Candidates).OrganizationId);
+        Assert.Equal(1, shortlist.DuplicateCount);
+    }
+
+    [Fact]
+    public void AcceptsLegacyOrganizationColumnInAnyPosition()
+    {
+        var shortlist = ShortlistCsv.Read(ShortlistCsv.Header + ",OrganizationId\n" + Row() + "," + Organization, Organization);
+
+        Assert.Empty(shortlist.Errors);
+        Assert.Equal(Organization, Assert.Single(shortlist.Candidates).OrganizationId);
+    }
 
     [Fact]
     public void UserOnlyCandidateDoesNotBecomeAnExactView()
@@ -22,7 +45,7 @@ public class ShortlistTests
     [Fact]
     public void RejectsCrossOrganizationInput()
     {
-        var shortlist = ShortlistCsv.Read(ShortlistCsv.Header + "\n" + Row(), Guid.NewGuid());
+        var shortlist = ShortlistCsv.Read(ShortlistCsv.Header + ",OrganizationId\n" + Row() + "," + Organization, Guid.NewGuid());
         Assert.Empty(shortlist.Candidates);
         Assert.Contains(shortlist.Errors, s => s.Contains("organization"));
     }
@@ -64,6 +87,27 @@ public class ShortlistTests
     }
 
     [Theory]
+    [InlineData("OrganizationId,OrganizationId")]
+    [InlineData("UnexpectedColumn")]
+    public void RejectsDuplicateOptionalOrUnknownColumns(string extraColumns)
+    {
+        var shortlist = ShortlistCsv.Read(ShortlistCsv.Header + "," + extraColumns + "\n" + Row(), Organization);
+        Assert.Empty(shortlist.Candidates);
+        Assert.NotEmpty(shortlist.Errors);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("not-an-organization-guid")]
+    [InlineData("00000000-0000-0000-0000-000000000000")]
+    public void RejectsInvalidExplicitOrganization(string organization)
+    {
+        var shortlist = ShortlistCsv.Read(ShortlistCsv.Header + ",OrganizationId\n" + Row() + "," + organization, Organization);
+        Assert.Empty(shortlist.Candidates);
+        Assert.NotEmpty(shortlist.Errors);
+    }
+
+    [Theory]
     [InlineData("=HYPERLINK(\"x\")")]
     [InlineData(" \t+SUM(1)")]
     [InlineData("@command")]
@@ -85,7 +129,7 @@ public class ShortlistTests
     [InlineData("2026-01-01T00:00:00Z", "2026-01-02T00:00:00Z", "20", "10", "SqlDuration", false)]
     public void ValidatesObservedTimingProvenance(string start, string end, string count, string p95, string metric, bool valid)
     {
-        var row = "1," + Organization + "," + User + ",EntraObjectId,,UserTableCandidate,account," +
+        var row = "1," + User + ",EntraObjectId,,UserTableCandidate,account," +
             string.Join(",", start, end, count, p95, metric);
         var result = ShortlistCsv.Read(ShortlistCsv.Header + "\n" + row, Organization);
         Assert.Equal(valid, result.Errors.Count == 0);

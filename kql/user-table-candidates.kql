@@ -1,32 +1,31 @@
 // User/table candidates only: no saved-view attribution.
-// Validate AppRequests.UserId is an Entra object ID in this export.
+// Open Logs on the intended Application Insights resource, not its workspace.
+// Use a resource dedicated to the intended Dataverse org; choose a bounded window.
+// Validate requests.user_Id is an Entra object ID in this export.
 let StartUtc = ago(7d);
 let EndUtc = now();
-let TargetOrganization = "REPLACE_WITH_DATAVERSE_ORGANIZATION_GUID";
-let AppResourceId = "REPLACE_WITH_APPLICATION_INSIGHTS_RESOURCE_ID";
 let SdkRetrievals =
-    AppDependencies
-    | where TimeGenerated between (StartUtc .. EndUtc)
-    | where _ResourceId =~ AppResourceId
-    | where tostring(Properties.organizationId) =~ TargetOrganization
-    | where DependencyType == "SDKRetrieveMultiple"
-    | extend EntityName = tostring(Properties.entityName)
+    dependencies
+    | where timestamp between (StartUtc .. EndUtc)
+    | where type == "SDKRetrieveMultiple"
+    | extend EntityName = tostring(customDimensions.entityName)
     | where isnotempty(EntityName)
-    | distinct OperationId, ServerId = ParentId, EntityName;
-AppRequests
-| where TimeGenerated between (StartUtc .. EndUtc)
-| where _ResourceId =~ AppResourceId
-| project OperationId, ServerId = Id, UserId, DurationMs
+    | distinct OperationId = operation_Id, ServerId = operation_ParentId, EntityName;
+requests
+| where timestamp between (StartUtc .. EndUtc)
+| project OperationId = operation_Id, ServerId = id, UserId = user_Id, DurationMs = duration
 | join kind=inner SdkRetrievals on OperationId, ServerId
 | extend ActorId = toguid(UserId)
 | where isnotnull(ActorId)
 | summarize DurationMs = max(DurationMs) by OperationId, ServerId, ActorId, EntityName
 | summarize SampleCount = count(), P95Ms = percentile(DurationMs, 95)
     by ActorId, EntityName
-| project SchemaVersion = 1, OrganizationId = TargetOrganization,
+| project SchemaVersion = 1,
     UserId = tostring(ActorId), UserIdType = "EntraObjectId",
     ViewId = "", Attribution = "UserTableCandidate", EntityName,
-    WindowStartUtc = format_datetime(StartUtc, "yyyy-MM-ddTHH:mm:ss.fffZ"),
-    WindowEndUtc = format_datetime(EndUtc, "yyyy-MM-ddTHH:mm:ss.fffZ"),
+    WindowStartUtc = strcat(format_datetime(StartUtc, "yyyy-MM-dd"), "T",
+        format_datetime(StartUtc, "HH:mm:ss.fff"), "Z"),
+    WindowEndUtc = strcat(format_datetime(EndUtc, "yyyy-MM-dd"), "T",
+        format_datetime(EndUtc, "HH:mm:ss.fff"), "Z"),
     SampleCount, P95Ms, MetricKind = "ServerRequest"
 | order by P95Ms desc

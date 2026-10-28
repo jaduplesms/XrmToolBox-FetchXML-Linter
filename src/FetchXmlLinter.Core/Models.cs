@@ -14,6 +14,9 @@ namespace FetchXmlLinter.Core
         public int? MaxLength { get; set; }
         public bool? IsCalculated { get; set; }
         public bool? IsLogical { get; set; }
+        public string? StorageType { get; set; }
+        public bool? IsPrimaryId { get; set; }
+        public IReadOnlyList<string> LookupTargets { get; set; } = Array.Empty<string>();
     }
 
     public interface IMetadataProvider
@@ -36,13 +39,31 @@ namespace FetchXmlLinter.Core
         public string DocumentationUrl { get; set; } = "";
     }
 
+    public sealed class QueryShape
+    {
+        public int ExplicitColumns { get; set; }
+        public int AllColumnSelections { get; set; }
+        public int Joins { get; set; }
+        public int InnerJoins { get; set; }
+        public int OuterJoins { get; set; }
+        public int OtherJoins { get; set; }
+        public int MaximumJoinDepth { get; set; }
+        public int SortColumns { get; set; }
+        public bool Distinct { get; set; }
+        public int? LookupColumns { get; set; }
+        public int? LogicalColumns { get; set; }
+        public int? CalculatedColumns { get; set; }
+    }
+
     public sealed class AnalysisResult
     {
-        public string EngineVersion { get; } = "0.1.0-alpha.1";
+        public string EngineVersion { get; } = "0.1.0-alpha.10";
+        public List<string> SelectedRuleIds { get; } = new List<string>();
         public AnalysisStatus Status { get; set; } = AnalysisStatus.Complete;
         public string SourceHash { get; set; } = "";
         public string Table { get; set; } = "";
         public List<string> Tables { get; } = new List<string>();
+        public QueryShape? Shape { get; set; }
         public List<Finding> Findings { get; } = new List<Finding>();
         public List<string> NotEvaluated { get; } = new List<string>();
         public string Error { get; set; } = "";

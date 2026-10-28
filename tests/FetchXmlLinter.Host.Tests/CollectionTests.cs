@@ -19,6 +19,84 @@ namespace FetchXmlLinter.Host.Tests
             new DataverseReader(session, token, new ImmediateProgress());
 
         [Fact]
+        public void LoadsMoreThanTenThousandUsersWithMinimalColumnsAndPaging()
+        {
+            var session = new FakeSession();
+            var pageNumber = 0;
+            session.ReadUsers = query =>
+            {
+                Assert.Null(query.TopCount);
+                Assert.Equal(new[] { "fullname", "internalemailaddress" }, query.ColumnSet.Columns);
+                Assert.Equal(1000, query.PageInfo.Count);
+                Assert.Equal(++pageNumber, query.PageInfo.PageNumber);
+                Assert.Equal(pageNumber == 1 ? null : "users-" + (pageNumber - 1), query.PageInfo.PagingCookie);
+                Assert.Equal(2, query.Criteria.Conditions.Count);
+                Assert.Contains(query.Criteria.Conditions, c => c.AttributeName == "isdisabled" && Equals(c.Values.Single(), false));
+                Assert.Contains(query.Criteria.Conditions, c => c.AttributeName == "accessmode" && Equals(c.Values.Single(), 0));
+                Assert.Equal(new[] { "fullname", "systemuserid" }, query.Orders.Select(o => o.AttributeName));
+                var page = new EntityCollection { MoreRecords = pageNumber < 11, PagingCookie = "users-" + pageNumber };
+                for (var i = 0; i < (pageNumber == 11 ? 1 : 1000); i++)
+                    page.Entities.Add(new Entity("systemuser", Guid.NewGuid())
+                    {
+                        ["fullname"] = "Synthetic user", ["internalemailaddress"] = "synthetic@example.invalid"
+                    });
+                return page;
+            };
+            using (var reader = Reader(session))
+            {
+                var result = reader.LoadUsers();
+                Assert.True(result.Complete);
+                Assert.Equal(10001, result.Users.Count);
+                Assert.All(result.Users, u => Assert.Equal("synthetic@example.invalid", u.Email));
+                Assert.Equal(0, session.ViewReads);
+            }
+        }
+
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public void UserCancellationOrPagingFailureRetainsExplicitlyIncompleteDirectory(bool cancel)
+        {
+            using (var cancellation = new CancellationTokenSource())
+            {
+                var session = new FakeSession();
+                var reads = 0;
+                var id = Guid.NewGuid();
+                session.ReadUsers = _ =>
+                {
+                    reads++;
+                    if (cancel) cancellation.Cancel();
+                    return Page(new Entity("systemuser", id) { ["fullname"] = "Synthetic user" }, true, "repeat");
+                };
+                using (var reader = Reader(session, cancellation.Token))
+                {
+                    var result = reader.LoadUsers();
+                    Assert.False(result.Complete);
+                    Assert.Single(result.Users);
+                    Assert.Contains("incomplete", result.Outcome);
+                    Assert.Contains(cancel ? "Cancelled" : "FAILED", result.Outcome);
+                    Assert.Equal(cancel ? 1 : 2, reads);
+                }
+            }
+        }
+
+        [Fact]
+        public void UserPermissionFailureIsNotAnEmptySuccessfulDirectory()
+        {
+            var session = new FakeSession();
+            session.ReadUsers = _ => throw new FaultException<OrganizationServiceFault>(
+                new OrganizationServiceFault { Message = "Directory access denied" });
+            using (var reader = Reader(session))
+            {
+                var result = reader.LoadUsers();
+                Assert.False(result.Complete);
+                Assert.Empty(result.Users);
+                Assert.Contains("FAILED", result.Outcome);
+                Assert.Contains("Directory access denied", result.Outcome);
+            }
+        }
+
+        [Fact]
         public void MismatchedEffectiveUserPreventsViewReadAndRestoresCaller()
         {
             var session = new FakeSession { VerifyAs = Guid.NewGuid() };
@@ -212,6 +290,41 @@ namespace FetchXmlLinter.Host.Tests
             }
         }
 
+        [Fact]
+        public void NormalizesCompatibleJoinTypesWithoutTreatingMultiChoiceAsInteger()
+        {
+            var primary = new UniqueIdentifierAttributeMetadata { LogicalName = "accountid" };
+            typeof(AttributeMetadata).GetProperty(nameof(AttributeMetadata.IsPrimaryId))!.SetValue(primary, true);
+            var entity = new EntityMetadata();
+            typeof(EntityMetadata).GetProperty(nameof(EntityMetadata.Attributes))!.SetValue(entity,
+                new AttributeMetadata[]
+                {
+                    primary,
+                    new LookupAttributeMetadata { LogicalName = "parentid", Targets = new[] { "account" } },
+                    new PicklistAttributeMetadata { LogicalName = "choice" },
+                    new IntegerAttributeMetadata { LogicalName = "number" },
+                    new MultiSelectPicklistAttributeMetadata { LogicalName = "choices" }
+                });
+            var session = new FakeSession
+            {
+                ExecuteRequest = _ => new RetrieveEntityResponse
+                {
+                    Results = new ParameterCollection { ["EntityMetadata"] = entity }
+                }
+            };
+            using (var reader = Reader(session))
+            {
+                var errors = new List<string>();
+                var metadata = reader.GetMetadata(new[] { "account" }, errors);
+                Assert.Empty(errors);
+                Assert.Equal(metadata.FindColumn("account", "accountid")!.StorageType, metadata.FindColumn("account", "parentid")!.StorageType);
+                Assert.True(metadata.FindColumn("account", "accountid")!.IsPrimaryId);
+                Assert.Equal(new[] { "account" }, metadata.FindColumn("account", "parentid")!.LookupTargets);
+                Assert.Equal(metadata.FindColumn("account", "number")!.StorageType, metadata.FindColumn("account", "choice")!.StorageType);
+                Assert.NotEqual(metadata.FindColumn("account", "number")!.StorageType, metadata.FindColumn("account", "choices")!.StorageType);
+            }
+        }
+
         private static Candidate Candidate(UserTarget user, Guid view) => new Candidate
         {
             UserId = user.Id, UserIdType = "DataverseSystemUserId", ViewId = view,
@@ -252,6 +365,7 @@ namespace FetchXmlLinter.Host.Tests
             public List<string> FetchReads { get; } = new List<string>();
             public Action? AfterViewRead { get; set; }
             public Func<OrganizationRequest, OrganizationResponse>? ExecuteRequest { get; set; }
+            public Func<QueryExpression, EntityCollection>? ReadUsers { get; set; }
 
             public EntityCollection RetrieveMultiple(QueryBase query)
             {
@@ -265,6 +379,8 @@ namespace FetchXmlLinter.Host.Tests
                     return users;
                 }
                 var views = Assert.IsType<QueryExpression>(query);
+                if (views.EntityName == "systemuser")
+                    return (ReadUsers ?? throw new InvalidOperationException("Unexpected user directory read."))(views);
                 Assert.Equal("userquery", views.EntityName);
                 Assert.Contains(views.Criteria.Conditions, c => c.AttributeName == "ownerid" && Equals(c.Values.Single(), CallerId));
                 Assert.Contains(views.Criteria.Conditions, c => c.AttributeName == "querytype" && Equals(c.Values.Single(), 0));

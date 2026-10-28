@@ -9,7 +9,7 @@ using System.Xml.Linq;
 
 namespace FetchXmlLinter.Core
 {
-    public sealed class Linter
+    public sealed partial class Linter
     {
         public const int MaximumXmlCharacters = 1024 * 1024;
         private const string AntiPatterns = "https://learn.microsoft.com/en-us/power-apps/developer/data-platform/query-antipatterns";
@@ -21,9 +21,14 @@ namespace FetchXmlLinter.Core
             "filter", "condition", "value", "order"
         };
 
-        public AnalysisResult Analyze(string xml, IMetadataProvider? metadata = null, string? layoutXml = null)
+        public AnalysisResult Analyze(string xml, IMetadataProvider? metadata = null, string? layoutXml = null,
+            IEnumerable<string>? enabledRuleIds = null)
         {
+            var enabled = new HashSet<string>(enabledRuleIds ?? RuleCatalog.All.Select(r => r.Id), StringComparer.Ordinal);
+            if (enabled.Count == 0 || enabled.Any(id => !RuleCatalog.All.Any(r => r.Id == id)))
+                throw new ArgumentException("Select at least one known rule ID from the rule catalog.", nameof(enabledRuleIds));
             var result = new AnalysisResult();
+            result.SelectedRuleIds.AddRange(RuleCatalog.All.Where(r => enabled.Contains(r.Id)).Select(r => r.Id));
             if (xml == null || xml.Length == 0 || xml.Length > MaximumXmlCharacters)
             {
                 result.Status = AnalysisStatus.Invalid;
@@ -76,6 +81,7 @@ namespace FetchXmlLinter.Core
                 return result;
             }
             result.Tables.AddRange(entities.Select(e => e.Attribute("name")!.Value).Distinct(StringComparer.OrdinalIgnoreCase));
+            AnalyzeShape(root, entities, result, enabled);
             var aliases = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var ambiguousAliases = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var entity in entities)
@@ -92,8 +98,8 @@ namespace FetchXmlLinter.Core
 
             foreach (var entity in entities)
             {
-                if (entity.Element("all-attributes") != null ||
-                    (entity.Name == "entity" && !entity.Elements("attribute").Any()))
+                if (enabled.Contains("FXL001") && (entity.Element("all-attributes") != null ||
+                    (entity.Name == "entity" && !entity.Elements("attribute").Any())))
                 {
                     Add(result, "FXL001", entity, "All-column or implicit projection on " + entity.Attribute("name")!.Value,
                         "Broad projection can retrieve columns the consumer does not need.",
@@ -107,14 +113,17 @@ namespace FetchXmlLinter.Core
             {
                 var op = condition.Attribute("operator")?.Value ?? "";
                 var value = condition.Attribute("value")?.Value;
-                if (op == "ends-with" || (op == "like" && value != null && HasLeadingWildcard(value)))
+                if (enabled.Contains("FXL002") && (op == "ends-with" || (op == "like" && value != null && HasLeadingWildcard(value))))
                     Add(result, "FXL002", condition, "operator=" + op + "; leading wildcard/suffix pattern",
                         "Leading-wildcard filtering is a documented performance risk.",
                         "Consider exact/prefix search only if the business requirement permits it.",
                         "Changing contains/suffix matching changes results. No performance benefit has been measured.", AntiPatterns);
             }
 
-            foreach (var node in root.Descendants().Where(e => e.Name == "attribute" || e.Name == "condition" || e.Name == "order"))
+            foreach (var node in root.Descendants().Where(e =>
+                (e.Name == "attribute" && enabled.Contains("FXL005")) ||
+                (e.Name == "condition" && (enabled.Contains("FXL003") || enabled.Contains("FXL004"))) ||
+                (e.Name == "order" && (enabled.Contains("FXL006") || enabled.Contains("FXL007")))))
             {
                 var column = node.Attribute(node.Name == "attribute" ? "name" : "attribute")?.Value;
                 if (string.IsNullOrWhiteSpace(column))
@@ -148,19 +157,19 @@ namespace FetchXmlLinter.Core
                 var evidence = table + "." + column + " (" + field.Kind + ")";
                 if (node.Name == "condition")
                 {
-                    if (field.IsCalculated == true)
+                    if (enabled.Contains("FXL003") && field.IsCalculated == true)
                         Add(result, "FXL003", node, evidence,
                             "Filtering on calculated/formula values may require computation before filtering.",
                             "Review a stored/searchable alternative with the table owner.",
                             "An alternative must preserve business semantics; calculation behavior is metadata-dependent.", AntiPatterns);
-                    else if (field.IsCalculated == null)
+                    else if (enabled.Contains("FXL003") && field.IsCalculated == null)
                         Incomplete(result, "Calculation classification unavailable: " + table + "." + column);
-                    if (field.Kind == ColumnKind.Memo || (field.Kind == ColumnKind.String && field.MaxLength > 850))
+                    if (enabled.Contains("FXL004") && (field.Kind == ColumnKind.Memo || (field.Kind == ColumnKind.String && field.MaxLength > 850)))
                         Add(result, "FXL004", node, evidence + "; MaxLength=" + field.MaxLength,
                             "Filtering large-text columns is a documented query anti-pattern.",
                             "Review the filtering requirement and a suitable search experience.",
                             "Dataverse Search is not a drop-in equivalent to this FetchXML filter.", AntiPatterns);
-                    if (field.Kind == ColumnKind.String && field.MaxLength == null)
+                    if (enabled.Contains("FXL004") && field.Kind == ColumnKind.String && field.MaxLength == null)
                         Incomplete(result, "String maximum length unavailable: " + table + "." + column);
                 }
                 if (node.Name == "attribute" && field.Kind == ColumnKind.Memo && node.Attribute("aggregate") == null)
@@ -176,12 +185,13 @@ namespace FetchXmlLinter.Core
                 }
                 if (node.Name == "order")
                 {
-                    if (field.Kind == ColumnKind.Choice)
+                    if (enabled.Contains("FXL006") && field.Kind == ColumnKind.Choice &&
+                        root.Attribute("useraworderby")?.Value != "true" && root.Attribute("useraworderby")?.Value != "1")
                         Add(result, "FXL006", node, evidence,
                             "Choice ordering ordinarily uses localized labels.",
                             "Review whether label-based ordering is required.",
                             "Ordering by integer values changes ordering semantics.", Ordering);
-                    if (field.Kind == ColumnKind.Lookup || context.Name == "link-entity" || entityName != null)
+                    if (enabled.Contains("FXL007") && (field.Kind == ColumnKind.Lookup || context.Name == "link-entity" || entityName != null))
                         Add(result, "FXL007", node, evidence,
                             "Lookup/related-table ordering can require additional related-data work.",
                             "Review whether this ordering is necessary for the consumer.",
@@ -190,7 +200,8 @@ namespace FetchXmlLinter.Core
                 }
             }
 
-            foreach (var option in root.Attributes().Where(a => a.Name == "options" || a.Name == "latematerialize" || a.Name == "no-lock"))
+            foreach (var option in root.Attributes().Where(a => enabled.Contains("FXL008") &&
+                (a.Name == "options" || a.Name == "latematerialize" || a.Name == "no-lock")))
                 Add(result, "FXL008", root, option.Name + "=" + option.Value,
                     option.Name == "options" ? "SQL query options require Microsoft support guidance." :
                     option.Name == "no-lock" ? "no-lock is a legacy setting and is no longer necessary." :
@@ -198,12 +209,14 @@ namespace FetchXmlLinter.Core
                     "Review existing settings against the documented guidance; do not change them automatically.",
                     "Presence alone is not evidence of a defect or benefit.", Performance,
                     FindingCategory.ContextualReview, Severity.Information);
-            foreach (var filter in root.Descendants("filter").Where(f => f.Attribute("hint") != null))
+            foreach (var filter in root.Descendants("filter").Where(f => enabled.Contains("FXL008") && f.Attribute("hint") != null))
                 Add(result, "FXL008", filter, "hint=" + filter.Attribute("hint")!.Value,
                     "Filter hints have specific applicability and nesting restrictions.",
                     "Review the documented restrictions without changing grouping or join semantics.",
                     "This rule inventories the setting; it does not prove the hint was applied or helped.", Performance,
                     FindingCategory.ContextualReview, Severity.Information);
+            AnalyzeProjection(root, metadata, result, enabled);
+            AnalyzeJoinKeys(root, metadata, result, enabled);
             return result;
         }
 

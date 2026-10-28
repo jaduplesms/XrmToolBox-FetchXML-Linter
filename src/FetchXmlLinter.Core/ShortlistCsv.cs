@@ -33,7 +33,7 @@ namespace FetchXmlLinter.Core
 
     public static class ShortlistCsv
     {
-        public const string Header = "SchemaVersion,OrganizationId,UserId,UserIdType,ViewId,Attribution,EntityName,WindowStartUtc,WindowEndUtc,SampleCount,P95Ms,MetricKind";
+        public const string Header = "SchemaVersion,UserId,UserIdType,ViewId,Attribution,EntityName,WindowStartUtc,WindowEndUtc,SampleCount,P95Ms,MetricKind";
         public const int MaximumCharacters = 2 * 1024 * 1024;
 
         public static Shortlist Read(string text, Guid expectedOrganization)
@@ -63,9 +63,12 @@ namespace FetchXmlLinter.Core
             }
             var columns = rows[0];
             var required = Header.Split(',');
-            if (columns.Length != required.Length || required.Any(c => columns.Count(h => h == c) != 1))
+            var organizationColumn = Array.IndexOf(columns, "OrganizationId");
+            if (columns.Length != required.Length + (organizationColumn >= 0 ? 1 : 0) ||
+                required.Any(c => columns.Count(h => h == c) != 1))
             {
-                result.Errors.Add("CSV must contain the version-one columns exactly once: " + Header);
+                result.Errors.Add("CSV must contain the version-one columns exactly once: " + Header +
+                    ". OrganizationId is optional; no other columns are supported.");
                 return result;
             }
             var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -84,7 +87,7 @@ namespace FetchXmlLinter.Core
                     if (Cell("SchemaVersion") != "1") throw new FormatException("unsupported SchemaVersion.");
                     var candidate = new Candidate
                     {
-                        OrganizationId = NonEmptyGuid(Cell("OrganizationId")),
+                        OrganizationId = organizationColumn >= 0 ? NonEmptyGuid(Cell("OrganizationId")) : expectedOrganization,
                         UserId = NonEmptyGuid(Cell("UserId")),
                         UserIdType = Cell("UserIdType"),
                         Attribution = Cell("Attribution"),

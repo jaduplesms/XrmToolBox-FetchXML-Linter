@@ -18,7 +18,15 @@ namespace FetchXmlLinter.XrmToolBox
     {
         public Guid Id { get; set; }
         public string Name { get; set; } = "";
-        public override string ToString() => Name + " | " + Id;
+        public string Email { get; set; } = "";
+        public override string ToString() => Name + (Email.Length == 0 ? "" : " | " + Email) + " | " + Id;
+    }
+
+    internal sealed class UserLoadResult
+    {
+        public List<UserTarget> Users { get; } = new List<UserTarget>();
+        public bool Complete { get; set; }
+        public string Outcome { get; set; } = "";
     }
 
     internal sealed class ViewSource
@@ -77,23 +85,56 @@ namespace FetchXmlLinter.XrmToolBox
 
         public Guid OrganizationId() => ((WhoAmIResponse)Call(() => client.Execute(new WhoAmIRequest()))).OrganizationId;
 
-        public List<UserTarget> FindUsers(string search)
+        public UserLoadResult LoadUsers()
         {
+            var result = new UserLoadResult();
             var query = new QueryExpression("systemuser")
             {
-                ColumnSet = new ColumnSet("fullname"),
-                TopCount = 200
+                ColumnSet = new ColumnSet("fullname", "internalemailaddress"),
+                PageInfo = new PagingInfo { Count = 1000, PageNumber = 1 }
             };
             query.Criteria.AddCondition("isdisabled", ConditionOperator.Equal, false);
             query.Criteria.AddCondition("accessmode", ConditionOperator.Equal, 0);
-            if (Guid.TryParse(search, out var id))
-                query.Criteria.AddCondition("systemuserid", ConditionOperator.Equal, id);
-            else
-                query.Criteria.AddCondition("fullname", ConditionOperator.BeginsWith, search);
             query.AddOrder("fullname", OrderType.Ascending);
             query.AddOrder("systemuserid", OrderType.Ascending);
-            return Call(() => client.RetrieveMultiple(query)).Entities
-                .Select(e => new UserTarget { Id = e.Id, Name = e.GetAttributeValue<string>("fullname") ?? e.Id.ToString() }).ToList();
+            var ids = new HashSet<Guid>();
+            var cookies = new HashSet<string>(StringComparer.Ordinal);
+            try
+            {
+                while (true)
+                {
+                    var page = Call(() => client.RetrieveMultiple(query));
+                    result.Users.AddRange(page.Entities.Where(e => ids.Add(e.Id)).Select(e => new UserTarget
+                    {
+                        Id = e.Id, Name = e.GetAttributeValue<string>("fullname") ?? e.Id.ToString(),
+                        Email = e.GetAttributeValue<string>("internalemailaddress") ?? ""
+                    }));
+                    progress.Report(result.Users.Count + " enabled Read/Write users loaded; reading directory...");
+                    if (!page.MoreRecords)
+                    {
+                        result.Complete = true;
+                        result.Outcome = "User directory loaded: " + result.Users.Count + " enabled Read/Write users.";
+                        break;
+                    }
+                    if (query.PageInfo.PageNumber >= 1000 || string.IsNullOrEmpty(page.PagingCookie) || !cookies.Add(page.PagingCookie))
+                        throw new InvalidOperationException("Missing/repeated user paging cookie or safety limit of 1,000 pages reached.");
+                    query.PageInfo.PageNumber++;
+                    query.PageInfo.PagingCookie = page.PagingCookie;
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                result.Outcome = "Cancelled; user directory is incomplete. Only received pages are available. Refresh to reload.";
+            }
+            catch (FaultException<OrganizationServiceFault> ex)
+            {
+                result.Outcome = "User load FAILED; directory is incomplete (not a successful empty result): " + ex.Detail.Message;
+            }
+            catch (InvalidOperationException ex)
+            {
+                result.Outcome = "User load FAILED; directory is incomplete: " + ex.Message;
+            }
+            return result;
         }
 
         public UserTarget ResolveActor(Candidate candidate)
@@ -220,6 +261,13 @@ namespace FetchXmlLinter.XrmToolBox
                         {
                             Kind = kind, MaxLength = (attribute as StringAttributeMetadata)?.MaxLength,
                             IsLogical = attribute.IsLogical,
+                            StorageType = attribute is LookupAttributeMetadata || attribute.AttributeType == AttributeTypeCode.Uniqueidentifier
+                                ? "Guid" : attribute.AttributeType == AttributeTypeCode.Picklist ||
+                                    attribute.AttributeType == AttributeTypeCode.State || attribute.AttributeType == AttributeTypeCode.Status ||
+                                    attribute.AttributeType == AttributeTypeCode.Integer
+                                    ? "Integer" : attribute.AttributeType?.ToString(),
+                            IsPrimaryId = attribute.IsPrimaryId,
+                            LookupTargets = (attribute as LookupAttributeMetadata)?.Targets ?? Array.Empty<string>(),
                             IsCalculated = attribute.SourceType == 1 || attribute.SourceType == 3 ? true :
                                 attribute.SourceType == null || attribute.SourceType == 0 || attribute.SourceType == 2 ? false : (bool?)null
                         });

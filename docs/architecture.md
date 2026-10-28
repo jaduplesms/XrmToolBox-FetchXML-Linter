@@ -48,6 +48,12 @@ DTDs and external entities are prohibited. Each XML input is limited to
 1,048,576 characters; FetchXML is additionally bounded to 10,000 elements and
 64 ancestor levels. This is not a complete FetchXML XSD validator.
 
+The XML editors indent and syntax-colour local copies without changing
+collected definitions. Formatting preserves values, mixed content and
+`xml:space`, prohibits DTDs, and bounds input, depth and output. Invalid input
+is retained with an explanation. Manual-analysis hashes and line numbers refer
+to the current editor contents; selected-view analysis retains the original XML.
+
 Exact telemetry markers are not ownership evidence. Shared/system/deleted or
 inaccessible markers remain unresolved; they never trigger fallback to all
 views. Actor-only candidates offer views for explicit review. A supplied table
