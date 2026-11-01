@@ -1,12 +1,19 @@
 # Rule catalog
 
-Engine version: `0.1.0-alpha.10`. Rules have stable `FXL` (FetchXML Linter)
+Engine version: `0.1.0`. Rules have stable `FXL` (FetchXML Linter)
 identifiers, independent of their topic grouping. Rule version is `1`.
 Findings distinguish documented risks from contextual review; severity is not
 a numerical confidence score or a predicted performance gain. Structural
 parse failures appear in the analysis status/error. Selected structural checks
 can also produce Error/Warning findings; `Complete` means evaluation completed,
 not that the query is valid or free of findings.
+
+The default analysis surface is `OnlineQuery`. `OfflineProfile` restricts the
+requested rules to FXL002-004, FXL010-011 and FXL026, recording the remaining
+IDs as skipped. Parsing and safety checks still run. Offline filter results
+remain `Incomplete` because relationship scope, Filter Columns, downloaded
+row volume, device SQL and sync benefit are outside static-filter analysis.
+An all-column projection is not evidence that every column syncs offline.
 
 Dataverse automatic query optimization is enabled by default. Shape
 simplification comes first. Late materialization is situational and can slow

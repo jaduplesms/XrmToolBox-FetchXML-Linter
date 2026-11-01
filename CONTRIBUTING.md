@@ -8,7 +8,10 @@ user/environment IDs or exported connection settings to issues or pull requests.
 Build and verify on Windows using `.\scripts\Build.ps1`. The core tests run on
 .NET 9; SDK collection tests run on .NET Framework 4.8 with a fake read-only
 service. The Windows PowerShell host check uses a disconnected WinForms control
-and proves the embedded core/resource load path. None replaces live XrmToolBox
+and proves cold MEF discovery and the merged-core distributable load path.
+Only the DLL in the host build's `net48\plugin` subfolder is installable;
+the unmerged parent output supports normal project references and tests.
+None replaces live XrmToolBox
 and authorized sandbox/workspace acceptance.
 
 For a rule change, add focused positive/negative cases, preserve source evidence,

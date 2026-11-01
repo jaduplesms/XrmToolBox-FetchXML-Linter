@@ -9,7 +9,12 @@ XrmToolBox 1.2025.10.74 APIs. It uses the host's existing OAuth connection,
 clones the `CrmServiceClient`, and changes caller identity only on that private
 client. The shared host client is never impersonated or disposed. The legacy
 client type is a host-compatibility choice, not a recommendation for standalone
-new Dataverse applications. Only our core DLL is embedded.
+new Dataverse applications. Only our core DLL is merged into the distributable
+plugin, with core types internalized. The separate core project remains reusable.
+The host build's `plugin` subfolder contains this self-contained assembly; the
+unmerged parent output is for project references/tests, not installation.
+Cold MEF discovery is checked before plugin instantiation, so assembly loading
+does not depend on a plugin static constructor registering a late resolver.
 
 ## Read-only collection
 
@@ -36,6 +41,18 @@ collected/shortlist/results state. Completed stale work is discarded. Cancellati
 is cooperative between reads and in retry waits; it cannot abort an in-flight
 synchronous SDK call. Known service-protection faults receive at most two
 additional tool-level attempts; SDK-internal retries can also occur.
+
+Offline-profile collection uses the same isolated connection with no
+impersonation. It reads `mobileofflineprofile`, profile-scoped
+`mobileofflineprofileitem` rows, and explicitly requested
+`mobileofflineprofileitemfilter` rows scoped to both profile and item. Reads
+are paged; cancellation, missing/repeated cookies and the 1,000-page limit
+fail explicitly without presenting a partial set as complete. A referenced
+`savedquery.fetchxml` is read only when the configured filter is absent.
+`viewquery` is never an XML fallback. Generated XML and offline SQL are
+inspection-only, separate from configured-filter linting. No profile or
+business-data query is executed, and no create/update/delete/publish/assign
+operation is introduced.
 
 Metadata is retrieved once per distinct referenced table within an analysis
 operation, not cached across connections. Unknown classification and retrieval
@@ -64,6 +81,7 @@ from the resolved collection user.
 No credentials are stored by this tool. The XrmToolBox host manages connection
 authentication. Reports can contain user/view IDs, table names, metadata,
 existing hint values and service error messages. JSON omits raw FetchXML/layout;
+offline source provenance also omits query bodies and raw relationship blobs;
 reports are still potentially sensitive and require review before sharing.
 CSV export quotes fields and neutralizes common spreadsheet formula prefixes.
 
@@ -73,3 +91,5 @@ CSV export quotes fields and neutralizes common spreadsheet formula prefixes.
 - [Query anti-patterns](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/query-antipatterns)
 - [SourceType values](https://learn.microsoft.com/en-us/dotnet/api/microsoft.xrm.sdk.metadata.attributemetadata.sourcetype)
 - [XrmToolBox base control](https://www.xrmtoolbox.com/documentation/for-developers/plugincontrolbase-base-class/)
+- [Offline profile item columns](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/mobileofflineprofileitem)
+- [Generated offline filter columns](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/mobileofflineprofileitemfilter)

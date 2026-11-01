@@ -13,11 +13,11 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 9.0.x
-      - name: Build, test, check host and create local package
+      - name: Build, test, audit dependencies and verify local package
         shell: pwsh
         run: .\scripts\Build.ps1
       - uses: actions/upload-artifact@v4
         with:
-          name: private-development-alpha
+          name: preview-candidate
           path: artifacts\*.nupkg
           if-no-files-found: error

@@ -21,6 +21,320 @@ namespace FetchXmlLinter.Host.Tests
     public sealed class ConnectionCallbackTests
     {
         [Fact]
+        public void SameNamedPersonalViewResultsIdentifyOwnersAndRetainThemInLocalCopies()
+        {
+            RunSta(() =>
+            {
+                using (var control = new LinterControl())
+                {
+                    var views = Find<CheckedListBox>(control, "Personal views to analyse");
+                    var first = new ViewSource
+                    {
+                        Name = "Synthetic view", OwnerId = Guid.NewGuid(), OwnerName = "Synthetic user A",
+                        Xml = "<fetch><entity name='account'><filter><condition attribute='name' operator='like' value='%sample'/></filter></entity></fetch>"
+                    };
+                    var second = new ViewSource
+                    {
+                        Name = first.Name, OwnerId = Guid.NewGuid(), OwnerName = "Synthetic user B",
+                        Xml = "<fetch><entity name='account'/></fetch>"
+                    };
+                    views.Items.Add(first, true);
+                    views.Items.Add(second, true);
+                    var rules = Find<CheckedListBox>(control, "Enabled analysis rules");
+                    for (var index = 0; index < rules.Items.Count; index++)
+                        rules.SetItemChecked(index, ((RuleDefinition)rules.Items[index]).Id == "FXL002");
+                    Invoke(control, "AnalyseViews");
+                    WaitForIdle(control);
+                    var results = Find<ComboBox>(control, "Analysis results");
+                    Assert.Equal(2, results.Items.Count);
+                    Assert.Equal("Synthetic view | Synthetic user A | 1 findings", results.GetItemText(results.Items[0]));
+                    Assert.Equal("Synthetic view | Synthetic user B | 0 findings", results.GetItemText(results.Items[1]));
+                    results.SelectedIndex = 1;
+                    Assert.Same(second, ((AnalysisEntry)results.SelectedItem).Source);
+                    views.SetItemChecked(1, false);
+                    Invoke(control, "OpenViewXml");
+                    Invoke(control, "AnalyseManual");
+                    WaitForIdle(control);
+                    var local = Assert.Single(results.Items.Cast<AnalysisEntry>());
+                    Assert.Same(first, local.Source);
+                    Assert.Equal("Local personal view - Synthetic view | Synthetic user A | 1 findings",
+                        results.GetItemText(local));
+                }
+            });
+        }
+
+        [Fact]
+        public void IntentNavigationRetainsTelemetryStepAndSharedSelectionsAndResults()
+        {
+            RunSta(() =>
+            {
+                using (var control = new LinterControl())
+                {
+                    var navigation = Find<ListBox>(control, "Task navigation");
+                    Assert.Equal(new[] { "Personal views", "Offline profiles", "FetchXML query", "Analysis rules" },
+                        navigation.Items.Cast<string>());
+                    Assert.Equal("Personal views", navigation.SelectedItem);
+                    var browse = Find<RadioButton>(control, "Browse views");
+                    var telemetry = Find<RadioButton>(control, "Find candidates using telemetry");
+                    Assert.True(browse.Checked);
+                    var views = Find<CheckedListBox>(control, "Personal views to analyse");
+                    views.Items.Add(new ViewSource
+                    {
+                        Name = "Synthetic view", Xml = "<fetch><entity name='account'><attribute name='name'/></entity></fetch>"
+                    }, true);
+                    var rules = Find<CheckedListBox>(control, "Enabled analysis rules");
+                    for (var index = 0; index < rules.Items.Count; index++)
+                        rules.SetItemChecked(index, ((RuleDefinition)rules.Items[index]).Id == "FXL002");
+                    Invoke(control, "AnalyseViews");
+                    WaitForIdle(control);
+                    var results = Find<ComboBox>(control, "Analysis results");
+                    var entry = Assert.Single(results.Items.Cast<AnalysisEntry>());
+                    Assert.Equal("Personal view", Find<System.Windows.Forms.Label>(control, "Analysis context").Text);
+                    var splitter = Find<SplitContainer>(control, "Input and results splitter");
+                    telemetry.Checked = true;
+                    Assert.True(splitter.Panel2Collapsed);
+                    Assert.Equal("Personal views", navigation.SelectedItem);
+                    Find<Button>(control, "2. Import CSV").PerformClick();
+                    Assert.False(splitter.Panel2Collapsed);
+                    Assert.True(Find<CheckedListBox>(control, "Validated CSV candidates").Visible);
+                    navigation.SelectedItem = "Offline profiles";
+                    Assert.False(telemetry.Visible);
+                    navigation.SelectedItem = "FetchXML query";
+                    Assert.False(telemetry.Visible);
+                    navigation.SelectedItem = "Analysis rules";
+                    Assert.True(splitter.Panel2Collapsed);
+                    navigation.SelectedItem = "Personal views";
+                    Assert.True(telemetry.Checked);
+                    Assert.True(Find<CheckedListBox>(control, "Validated CSV candidates").Visible);
+                    Assert.False(splitter.Panel2Collapsed);
+                    Find<Button>(control, "3. Review views").PerformClick();
+                    Assert.True(views.Visible);
+                    Assert.False(Find<CheckedListBox>(control, "Users").Visible);
+                    Assert.Single(views.CheckedItems);
+                    browse.Checked = true;
+                    Assert.True(views.Visible);
+                    Assert.True(Find<CheckedListBox>(control, "Users").Visible);
+                    Assert.False(Find<Button>(control, "2. Import CSV").Visible);
+                    Assert.Equal(new[] { "FXL002" }, rules.CheckedItems.Cast<RuleDefinition>().Select(r => r.Id));
+                    Assert.Same(entry, results.SelectedItem);
+                }
+            });
+        }
+
+        [Fact]
+        public void TelemetryCollectionOpensSharedViewReviewInsidePersonalViews()
+        {
+            RunSta(() =>
+            {
+                using (var control = new LinterControl())
+                {
+                    Find<RadioButton>(control, "Find candidates using telemetry").Checked = true;
+                    Find<Button>(control, "2. Import CSV").PerformClick();
+                    var collected = new CollectionResult();
+                    var view = new ViewSource { Name = "Synthetic matching view", Xml = "<fetch><entity name='account'/></fetch>" };
+                    collected.Views.Add(view);
+                    Invoke(control, "PresentCollection", collected);
+                    Assert.Equal("Personal views", Find<ListBox>(control, "Task navigation").SelectedItem);
+                    Assert.True(Find<RadioButton>(control, "Find candidates using telemetry").Checked);
+                    var views = Find<CheckedListBox>(control, "Personal views to analyse");
+                    Assert.True(views.Visible);
+                    Assert.Same(view, Assert.Single(views.Items.Cast<ViewSource>()));
+                    Assert.Empty(views.CheckedItems);
+                    Assert.False(Find<CheckedListBox>(control, "Users").Visible);
+                    Assert.False(Find<SplitContainer>(control, "Input and results splitter").Panel2Collapsed);
+                }
+            });
+        }
+
+        [Fact]
+        public void NewQueryResetsOfflineContextWithoutRelabellingExistingResults()
+        {
+            RunSta(() =>
+            {
+                using (var control = new LinterControl())
+                {
+                    const string xml = "<fetch><entity name='account'><attribute name='name'/></entity></fetch>";
+                    Find<CheckedListBox>(control, "Personal views to analyse").Items.Add(
+                        new ViewSource { Name = "Synthetic view", Xml = xml }, true);
+                    Invoke(control, "OpenViewXml");
+                    Find<CheckedListBox>(control, "Offline profile tables").Items.Add(
+                        new OfflineProfileItem { EntityName = "account", ConfiguredXml = xml }, true);
+                    Invoke(control, "OpenOfflineXml");
+                    var navigation = Find<ListBox>(control, "Task navigation");
+                    navigation.SelectedItem = "Personal views";
+                    navigation.SelectedItem = "FetchXML query";
+                    Assert.Contains("local offline", Find<System.Windows.Forms.Label>(control, "Query source").Text);
+                    var rules = Find<CheckedListBox>(control, "Enabled analysis rules");
+                    for (var index = 0; index < rules.Items.Count; index++)
+                        rules.SetItemChecked(index, ((RuleDefinition)rules.Items[index]).Id == "FXL002");
+                    Invoke(control, "AnalyseManual");
+                    WaitForIdle(control);
+                    var results = Find<ComboBox>(control, "Analysis results");
+                    var offline = Assert.Single(results.Items.Cast<AnalysisEntry>());
+                    Assert.Null(offline.Source);
+                    Assert.Equal("Local offline filter - account | 0 findings", offline.ToString());
+                    var context = Find<System.Windows.Forms.Label>(control, "Analysis context");
+                    Assert.Equal("Offline profile filter", context.Text);
+                    Invoke(control, "NewQuery");
+                    Assert.Empty(Find<RichTextBox>(control, "FetchXML").Text);
+                    Assert.Same(offline, results.SelectedItem);
+                    Assert.Equal("Offline profile filter", context.Text);
+                    Find<RichTextBox>(control, "FetchXML").Text = xml;
+                    Invoke(control, "AnalyseManual");
+                    WaitForIdle(control);
+                    var supplied = Assert.Single(results.Items.Cast<AnalysisEntry>());
+                    Assert.Equal(AnalysisSurface.OnlineQuery, supplied.Result.Surface);
+                    Assert.Null(supplied.OfflineSource);
+                    Assert.Null(supplied.Source);
+                    Assert.Equal("Supplied FetchXML | 0 findings", supplied.ToString());
+                    Assert.Equal("Supplied FetchXML", context.Text);
+                }
+            });
+        }
+
+        [Fact]
+        public void OfflineCheckTargetingKeepsLocalEditorInOfflineContextAndReportsCriteriaOnlyCoverage()
+        {
+            RunSta(() =>
+            {
+                using (var control = new LinterControl())
+                {
+                    var requests = 0;
+                    control.OnRequestConnection += (_, __) => requests++;
+                    var profiles = Find<ComboBox>(control, "Offline profiles");
+                    profiles.Items.Add(new OfflineProfile { Id = Guid.NewGuid(), Name = "Synthetic profile" });
+                    profiles.SelectedIndex = 0;
+                    var configured = new OfflineProfileItem
+                    {
+                        Id = Guid.NewGuid(), ProfileName = "Synthetic profile", EntityName = "account",
+                        ConfiguredXml = "<fetch><entity name='account'><all-attributes/>" +
+                            "<filter><condition attribute='name' operator='like' value='%sample'/></filter></entity></fetch>"
+                    };
+                    var criteriaOnly = new OfflineProfileItem
+                    {
+                        Id = Guid.NewGuid(), EntityName = "contact", DistributionCriteria = 0,
+                        ViewQuery = "select contactid from contact", SelectedColumns = "[\"fullname\"]"
+                    };
+                    Invoke(control, "PresentOfflineItems", new List<OfflineProfileItem> { configured, criteriaOnly });
+                    var items = Find<CheckedListBox>(control, "Offline profile tables");
+                    var open = Find<Button>(control, "Open filter XML");
+                    var analyse = Find<Button>(control, "Analyse tables");
+                    Assert.False(open.Enabled);
+                    Assert.False(analyse.Enabled);
+                    items.SetItemChecked(0, true);
+                    items.SelectedIndex = 1;
+                    Assert.True(open.Enabled);
+                    Assert.Empty(Find<RichTextBox>(control, "Configured offline FetchXML").Text);
+                    Assert.Contains("fullname", Find<TextBox>(control, "Offline scope and columns").Text);
+                    Assert.Equal(criteriaOnly.ViewQuery, Find<TextBox>(control, "Referenced view SQL").Text);
+                    Invoke(control, "OpenOfflineXml");
+                    Assert.Contains("account", Find<RichTextBox>(control, "FetchXML").Text);
+                    Assert.Contains("local offline", Find<System.Windows.Forms.Label>(control, "Query source").Text);
+                    var rules = Find<CheckedListBox>(control, "Enabled analysis rules");
+                    for (var index = 0; index < rules.Items.Count; index++)
+                    {
+                        var id = ((RuleDefinition)rules.Items[index]).Id;
+                        rules.SetItemChecked(index, id == "FXL001" || id == "FXL002" || id == "FXL005");
+                    }
+                    Invoke(control, "AnalyseManual");
+                    WaitForIdle(control);
+                    var results = Find<ComboBox>(control, "Analysis results");
+                    var manual = Assert.IsType<AnalysisEntry>(Assert.Single(results.Items.Cast<object>()));
+                    Assert.Same(configured, manual.OfflineSource);
+                    Assert.Equal("Offline profile filter", Find<System.Windows.Forms.Label>(control, "Analysis context").Text);
+                    Assert.Equal(AnalysisSurface.OfflineProfile, manual.Result.Surface);
+                    Assert.Equal(new[] { "FXL002" }, manual.Result.Findings.Select(f => f.RuleId));
+                    Assert.Contains("FXL005", manual.Result.SkippedRuleIds);
+                    items.SetItemChecked(1, true);
+                    Assert.False(open.Enabled);
+                    Invoke(control, "AnalyseOfflineItems");
+                    WaitForIdle(control);
+                    Assert.True(analyse.Enabled);
+                    var entries = results.Items.Cast<AnalysisEntry>().ToList();
+                    Assert.Equal(2, entries.Count);
+                    Assert.All(entries, e => Assert.Equal(AnalysisSurface.OfflineProfile, e.Result.Surface));
+                    Assert.Equal(AnalysisStatus.Incomplete, entries[1].Result.Status);
+                    Assert.Contains(entries[1].Result.NotEvaluated, s => s.Contains("No explicit FetchXML"));
+                    Assert.Equal(0, requests);
+                    items.SetItemChecked(0, false);
+                    Assert.False(open.Enabled);
+                }
+            });
+        }
+
+        [Fact]
+        public void GeneratedSqlAndPlaceholderPayloadsAreReadOnlyAndClearedOnSelectionOrConnectionChanges()
+        {
+            RunSta(() =>
+            {
+                using (var control = new LinterControl())
+                {
+                    var profile = new OfflineProfile { Id = Guid.NewGuid(), Name = "Synthetic profile" };
+                    Invoke(control, "PresentOfflineProfiles", new List<OfflineProfile> { profile });
+                    var profiles = Find<ComboBox>(control, "Offline profiles");
+                    profiles.SelectedIndex = 0;
+                    Invoke(control, "PresentOfflineItems", new List<OfflineProfileItem>
+                    {
+                        new OfflineProfileItem { EntityName = "account" }, new OfflineProfileItem { EntityName = "contact" }
+                    });
+                    var items = Find<CheckedListBox>(control, "Offline profile tables");
+                    items.SelectedIndex = 0;
+                    var filters = Find<ComboBox>(control, "Generated filter records");
+                    filters.Items.Add(new OfflineGeneratedFilter
+                    {
+                        Id = Guid.NewGuid(), FetchXml = "[\"\"]",
+                        OfflineSql = "/*SelectStart*/ select [accountid] from account"
+                    });
+                    filters.SelectedIndex = 0;
+                    Assert.Equal("[\"\"]", Find<RichTextBox>(control, "Generated offline FetchXML").Text);
+                    Assert.Contains("placeholder", Find<System.Windows.Forms.Label>(control, "Generated definition coverage").Text);
+                    var sql = Find<TextBox>(control, "Generated offline SQL");
+                    Assert.True(sql.ReadOnly);
+                    Assert.StartsWith("/*SelectStart*/", sql.Text);
+                    Assert.True(Find<RichTextBox>(control, "Configured offline FetchXML").ReadOnly);
+                    items.SelectedIndex = 1;
+                    Assert.Empty(sql.Text);
+                    Assert.Empty(filters.Items);
+                    control.UpdateConnection(new NoRequestsService(), new ConnectionDetail(), "", null!);
+                    Assert.Empty(profiles.Items);
+                    Assert.Empty(items.Items);
+                    Assert.Empty(filters.Items);
+                    Assert.False(Find<Button>(control, "Load tables").Enabled);
+                    Assert.False(Find<Button>(control, "Load generated definitions").Enabled);
+                }
+            });
+        }
+
+        [Fact]
+        public void OpeningAPersonalViewRestoresOnlineAnalysisAfterOpeningAnOfflineFilter()
+        {
+            RunSta(() =>
+            {
+                using (var control = new LinterControl())
+                {
+                    const string xml = "<fetch><entity name='account'><all-attributes/></entity></fetch>";
+                    var items = Find<CheckedListBox>(control, "Offline profile tables");
+                    items.Items.Add(new OfflineProfileItem { ConfiguredXml = xml }, true);
+                    Invoke(control, "OpenOfflineXml");
+                    var views = Find<CheckedListBox>(control, "Personal views to analyse");
+                    views.Items.Add(new ViewSource { Name = "Synthetic", Xml = xml }, true);
+                    Invoke(control, "OpenViewXml");
+                    var rules = Find<CheckedListBox>(control, "Enabled analysis rules");
+                    for (var index = 0; index < rules.Items.Count; index++)
+                        rules.SetItemChecked(index, ((RuleDefinition)rules.Items[index]).Id == "FXL001");
+                    Invoke(control, "AnalyseManual");
+                    WaitForIdle(control);
+                    var entry = Assert.IsType<AnalysisEntry>(Assert.Single(Find<ComboBox>(control, "Analysis results").Items.Cast<object>()));
+                    Assert.Equal(AnalysisSurface.OnlineQuery, entry.Result.Surface);
+                    Assert.Null(entry.OfflineSource);
+                    Assert.Equal("Personal view", Find<System.Windows.Forms.Label>(control, "Analysis context").Text);
+                    Assert.Contains("Local personal view", entry.SourceName);
+                    Assert.Contains(entry.Result.Findings, f => f.RuleId == "FXL001");
+                }
+            });
+        }
+
+        [Fact]
         public void RuleSubsetAppliesToManualAndCollectedViewsWithoutRequiringMetadataConnection()
         {
             RunSta(() =>
@@ -199,7 +513,7 @@ namespace FetchXmlLinter.Host.Tests
                     Assert.True(XNode.DeepEquals(XDocument.Parse(first.Xml), XDocument.Parse(Find<RichTextBox>(control, "FetchXML").Text)));
                     Assert.True(XNode.DeepEquals(XDocument.Parse(first.Layout), XDocument.Parse(Find<RichTextBox>(control, "Optional layout XML").Text)));
                     Assert.True(Find<RichTextBox>(control, "FetchXML").Lines.Length > 1);
-                    Assert.Equal("4. Analyse a query", navigation.SelectedItem);
+                    Assert.Equal("FetchXML query", navigation.SelectedItem);
                     Assert.Contains(first.Name, Find<System.Windows.Forms.Label>(control, "Query source").Text);
                     Assert.Empty(Find<ComboBox>(control, "Analysis results").Items);
                     views.SetItemChecked(1, true);

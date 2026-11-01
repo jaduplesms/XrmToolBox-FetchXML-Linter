@@ -1,0 +1,14 @@
+<Project>
+  <Target Name="MergePluginCore" AfterTargets="Build">
+    <MakeDir Directories="$(TargetDir)plugin" />
+    <ItemGroup>
+      <PluginMergeInput Include="$(TargetPath)" />
+      <PluginMergeInput Include="$(TargetDir)FetchXmlLinter.Core.dll" />
+    </ItemGroup>
+    <ILRepack InputAssemblies="@(PluginMergeInput)"
+              OutputFile="$(TargetDir)plugin\$(TargetFileName)"
+              LibraryPath="$(TargetDir)"
+              Internalize="true"
+              TargetKind="Dll" />
+  </Target>
+</Project>

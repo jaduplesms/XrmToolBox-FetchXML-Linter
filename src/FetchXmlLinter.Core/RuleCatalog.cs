@@ -37,6 +37,10 @@ namespace FetchXmlLinter.Core
         private const string Joins = "https://learn.microsoft.com/en-us/power-apps/developer/data-platform/fetchxml/join-tables";
         private const string Fetch = "https://learn.microsoft.com/en-us/power-apps/developer/data-platform/fetchxml/reference/fetch";
 
+        public static bool SupportsOfflineProfile(string ruleId) =>
+            ruleId == "FXL002" || ruleId == "FXL003" || ruleId == "FXL004" ||
+            ruleId == "FXL010" || ruleId == "FXL011" || ruleId == "FXL026";
+
         public static IReadOnlyList<RuleDefinition> All { get; } = Array.AsReadOnly(new[]
         {
             new RuleDefinition("FXL001", "All-column selection",

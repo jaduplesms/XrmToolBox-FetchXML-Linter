@@ -22,14 +22,38 @@ namespace FetchXmlLinter.XrmToolBox
     {
         public string SourceName { get; set; } = "";
         public ViewSource? Source { get; set; }
+        public OfflineProfileItem? OfflineSource { get; set; }
         public AnalysisResult Result { get; set; } = new AnalysisResult();
         public DateTime AnalysedAtUtc { get; set; }
-        public override string ToString() => SourceName + " | " + Result.Findings.Count + " findings";
+        public override string ToString() => SourceName +
+            (Source == null ? "" : " | " + Source.OwnerDisplayName) +
+            " | " + Result.Findings.Count + " findings";
     }
 
-    public sealed class LinterControl : PluginControlBase
+    public sealed partial class LinterControl : PluginControlBase
     {
-        private enum WorkflowPage { UsageKql, UsageCsv, PersonalViews, ManualQuery, Rules }
+        private enum WorkflowPage { UsageKql, UsageCsv, PersonalViews, ManualQuery, OfflineProfiles, Rules }
+        private readonly WorkflowPage[] navigationPages =
+            { WorkflowPage.PersonalViews, WorkflowPage.OfflineProfiles, WorkflowPage.ManualQuery, WorkflowPage.Rules };
+        private WorkflowPage lastPersonalPage = WorkflowPage.PersonalViews;
+        private WorkflowPage lastTelemetryPage = WorkflowPage.UsageKql;
+        private bool navigating;
+        private AnalysisSurface manualSurface;
+        private OfflineProfileItem? manualOfflineSource;
+        private ViewSource? manualViewSource;
+        private readonly FlowLayoutPanel personalRoutes = Commands();
+        private readonly FlowLayoutPanel telemetrySteps = Commands();
+        private readonly SplitContainer personalSelectors = Split(Orientation.Vertical, 360);
+        private readonly RadioButton browseRoute = new RadioButton
+        {
+            Text = "Browse views", AutoSize = true, Checked = true,
+            AccessibleName = "Browse views"
+        };
+        private readonly RadioButton telemetryRoute = new RadioButton
+        {
+            Text = "Find candidates using telemetry", AutoSize = true,
+            AccessibleName = "Find candidates using telemetry"
+        };
         private readonly ToolTip tooltips = new ToolTip { AutoPopDelay = 15000, InitialDelay = 400, ReshowDelay = 150 };
         private readonly SplitContainer workspace = Split(Orientation.Horizontal, 400);
         private double workspaceRatio = 0.6;
@@ -66,14 +90,15 @@ namespace FetchXmlLinter.XrmToolBox
         private readonly CheckedListBox users = Picker("Users");
         private readonly CheckedListBox views = Picker("Personal views to analyse");
         private readonly CheckedListBox shortlist = Picker("Validated CSV candidates");
-        private readonly ComboBox results = new ComboBox { Width = 280, DropDownStyle = ComboBoxStyle.DropDownList, AccessibleName = "Analysis results" };
+        private readonly ComboBox results = new ComboBox { Width = 440, DropDownWidth = 800, DropDownStyle = ComboBoxStyle.DropDownList, AccessibleName = "Analysis results" };
+        private readonly Label resultContext = new Label { Text = "Results for", AutoSize = true, Padding = new Padding(0, 6, 0, 0), AccessibleName = "Analysis context" };
         private readonly CheckedListBox rules = Picker("Enabled analysis rules");
         private readonly ListBox navigation = new ListBox { Dock = DockStyle.Fill, BorderStyle = BorderStyle.None, DrawMode = DrawMode.OwnerDrawFixed, ItemHeight = 46, AccessibleName = "Task navigation" };
         private readonly DataGridView findings = new DataGridView { Dock = DockStyle.Fill, ReadOnly = true, AllowUserToAddRows = false, AllowUserToDeleteRows = false, AllowUserToResizeRows = false, RowHeadersVisible = false, MultiSelect = false, SelectionMode = DataGridViewSelectionMode.FullRowSelect, AutoGenerateColumns = false, BackgroundColor = Color.White, BorderStyle = BorderStyle.None, AccessibleName = "Findings" };
         private readonly Label emptyFindings = new Label { Dock = DockStyle.Fill, Padding = new Padding(16), Text = "Run an analysis to see findings here.", AccessibleName = "Findings empty state" };
         private readonly Label summary = new Label { Dock = DockStyle.Fill, AutoSize = true, Padding = new Padding(8, 4, 8, 4), Text = "No analysis yet. Choose a task above to get started.", AccessibleName = "Analysis summary" };
         private readonly Label ruleScope = new Label { AutoSize = true, Padding = new Padding(0, 7, 12, 0), AccessibleName = "Enabled rule count" };
-        private readonly Label status = new Label { Dock = DockStyle.Fill, Text = "Private alpha | Read-only review. Queries and saved views are never executed or changed.", Padding = new Padding(12), AccessibleName = "Workflow status" };
+        private readonly Label status = new Label { Dock = DockStyle.Fill, Text = "Public preview | Read-only review. Queries, saved views and profiles are never executed or changed.", Padding = new Padding(12), AccessibleName = "Workflow status" };
         private readonly Panel inputs = new Panel { Dock = DockStyle.Fill, BackColor = Color.White };
         private readonly Dictionary<WorkflowPage, Control> pages = new Dictionary<WorkflowPage, Control>();
         private readonly CheckBox showTechnical = new CheckBox { Text = "Technical details", AutoSize = true, AccessibleName = "Show technical details" };
@@ -119,11 +144,12 @@ namespace FetchXmlLinter.XrmToolBox
             manualCommands.Controls.Add(Action("Analyse query", AnalyseManual, "Review the editor's FetchXML using the enabled rules. Does not execute the query.", true));
             manualCommands.Controls.Add(Action("Open XML file...", OpenXml, "Load a local XML file into the query editor. Does not run an analysis."));
             manualCommands.Controls.Add(Action("Format XML", FormatXml, "Indent and syntax-colour the FetchXML and included Layout XML locally. Does not change saved definitions or run an analysis."));
+            manualCommands.Controls.Add(Action("New query", NewQuery, "Clear the local editors and start supplied FetchXML with online-query rule scope. Saved definitions and existing results are unchanged."));
             manualCommands.Controls.Add(connectedMetadata);
             manualCommands.Controls.Add(includeLayout);
-            pages.Add(WorkflowPage.ManualQuery, Page("Analyse a query", "Paste FetchXML, open a file, or open one checked personal view. Review the XML without executing it.", manualSplit, manualCommands));
+            pages.Add(WorkflowPage.ManualQuery, Page("FetchXML query", "Paste FetchXML, open a file, or inspect a local copy from a view or offline profile. Review the XML without executing it.", manualSplit, manualCommands));
 
-            var pickers = Split(Orientation.Vertical, 360);
+            var pickers = personalSelectors;
             pickers.Panel1MinSize = 250;
             pickers.Panel2MinSize = 220;
             pickers.AccessibleName = "Personal view selectors";
@@ -145,7 +171,17 @@ namespace FetchXmlLinter.XrmToolBox
             userPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             for (var index = 0; index < 5; index++)
                 userPanel.RowStyles.Add(new RowStyle(index == 2 ? SizeType.Percent : SizeType.AutoSize, index == 2 ? 100 : 0));
-            userPanel.Controls.Add(new Label { Text = "Filter name, email or Dataverse ID", AutoSize = true }, 0, 0);
+            var filterHelp = new Label { Text = "Filter name, email or Dataverse ID", AutoSize = true };
+            userPanel.Controls.Add(filterHelp, 0, 0);
+            pickers.SizeChanged += (_, __) =>
+            {
+                var compact = pickers.Height < 240;
+                filterHelp.Visible = !compact;
+                userPanel.RowStyles[0].SizeType = compact ? SizeType.Absolute : SizeType.AutoSize;
+                userPanel.RowStyles[0].Height = 0;
+            };
+            search.AccessibleDescription = "Filter loaded users by name, email or Dataverse ID. Hidden checked users remain selected.";
+            tooltips.SetToolTip(search, search.AccessibleDescription);
             userPanel.Controls.Add(userCommands, 0, 1);
             userPanel.Controls.Add(users, 0, 2);
             userPanel.Controls.Add(userFooter, 0, 3);
@@ -155,7 +191,7 @@ namespace FetchXmlLinter.XrmToolBox
             var viewCommands = Commands();
             viewCommands.Dock = DockStyle.Bottom;
             viewCommands.Controls.Add(viewCount);
-            openView = Action("Open XML", OpenViewXml, "Open the one checked view's XML in Analyse a query for inspection or editing. Does not run an analysis.");
+            openView = Action("Open XML", OpenViewXml, "Open the one checked view's XML in FetchXML query for inspection or editing. Does not run an analysis.");
             analyseViews = Action("Analyse", AnalyseViews, "Review all checked personal views using the enabled rules. Does not execute or change saved views.", true);
             viewCommands.Controls.Add(openView);
             viewCommands.Controls.Add(analyseViews);
@@ -214,8 +250,8 @@ namespace FetchXmlLinter.XrmToolBox
             telemetry.Controls.Add(kql);
             telemetry.Controls.Add(telemetryCommands);
             templates.SelectedIndex = 0;
-            pages.Add(WorkflowPage.UsageKql, Page("Prepare usage KQL", "1. Copy a template. 2. Run it externally in the intended Application Insights resource. 3. Export CSV, then choose Import usage CSV. You can also start directly with personal views or manual XML.", Section("KQL - run externally in Application Insights Logs", telemetry), Commands()));
-            pages.Add(WorkflowPage.UsageCsv, Page("Import usage CSV", "Import CSV, check validated candidates, then load matching views. The tool opens Review personal views with the retrieved definitions.", Section("Check imported candidates to enable Load matching views", shortlist), csvCommands));
+            pages.Add(WorkflowPage.UsageKql, Page("Prepare usage KQL", "Copy a template, run it externally in the intended Application Insights resource, then export CSV. Continue to Import CSV, or choose Browse views to skip telemetry.", Section("KQL - run externally in Application Insights Logs", telemetry), Commands()));
+            pages.Add(WorkflowPage.UsageCsv, Page("Import usage CSV", "Import CSV, check validated candidates, then load matching views. Continue to Review views to select and analyse the retrieved definitions.", Section("Check imported candidates to enable Load matching views", shortlist), csvCommands));
 
             var ruleSplit = Split(Orientation.Vertical, 360);
             ruleSplit.Panel1.Controls.Add(Section("Rules included in the next analysis", rules));
@@ -230,26 +266,47 @@ namespace FetchXmlLinter.XrmToolBox
             foreach (var rule in RuleCatalog.All) rules.Items.Add(rule, true);
             rules.SelectedIndex = 0;
             pages.Add(WorkflowPage.Rules, Page("Analysis rules", "All rules are enabled by default. Your selection applies to every workflow for this tool session; parsing and safety checks always run.", ruleSplit, ruleCommands));
+            BuildOfflinePage();
             foreach (var page in pages.Values) { inputs.Controls.Add(page); page.Visible = false; }
 
-            navigation.Items.AddRange(new object[] { "1. Prepare usage KQL", "2. Import usage CSV", "3. Review personal views", "4. Analyse a query", "Settings: Analysis rules" });
+            personalRoutes.Controls.Add(browseRoute);
+            personalRoutes.Controls.Add(telemetryRoute);
+            browseRoute.CheckedChanged += (_, __) =>
+            {
+                if (browseRoute.Checked && !navigating) Navigate(WorkflowPage.PersonalViews);
+            };
+            telemetryRoute.CheckedChanged += (_, __) =>
+            {
+                if (telemetryRoute.Checked && !navigating) Navigate(lastTelemetryPage);
+            };
+            telemetrySteps.Controls.Add(Action("1. Prepare KQL", () => Navigate(WorkflowPage.UsageKql), "Prepare a KQL template to run externally in Application Insights."));
+            telemetrySteps.Controls.Add(Action("2. Import CSV", () => Navigate(WorkflowPage.UsageCsv), "Import an exported telemetry shortlist and load checked matching views."));
+            telemetrySteps.Controls.Add(Action("3. Review views", () => Navigate(WorkflowPage.PersonalViews), "Review the loaded personal views. Check views, then choose Analyse."));
+            navigation.Items.AddRange(new object[] { "Personal views", "Offline profiles", "FetchXML query", "Analysis rules" });
             navigation.DrawItem += (_, args) =>
             {
                 if (args.Index < 0) return;
                 var selected = (args.State & DrawItemState.Selected) != 0;
                 using (var background = new SolidBrush(selected ? Color.FromArgb(224, 238, 251) : BackColor))
                     args.Graphics.FillRectangle(background, args.Bounds);
+                var bounds = args.Bounds;
+                if (navigationPages[args.Index] == WorkflowPage.Rules)
+                {
+                    using (var separator = new Pen(Color.FromArgb(207, 216, 226)))
+                        args.Graphics.DrawLine(separator, bounds.Left + 12, bounds.Top + 4, bounds.Right - 12, bounds.Top + 4);
+                    bounds.Y += 10;
+                    bounds.Height -= 10;
+                }
                 TextRenderer.DrawText(args.Graphics, navigation.Items[args.Index].ToString(), Font,
-                    new Rectangle(args.Bounds.X + 12, args.Bounds.Y, args.Bounds.Width - 16, args.Bounds.Height),
+                    new Rectangle(bounds.X + 12, bounds.Y, bounds.Width - 16, bounds.Height),
                     selected ? Color.FromArgb(15, 108, 189) : ForeColor, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
             };
             navigation.BackColor = BackColor;
             navigation.SelectedIndexChanged += (_, __) =>
             {
-                foreach (var page in pages) page.Value.Visible = (int)page.Key == navigation.SelectedIndex;
-                workspace.Panel2Collapsed = navigation.SelectedIndex == (int)WorkflowPage.Rules ||
-                    navigation.SelectedIndex == (int)WorkflowPage.UsageKql;
-                PositionWorkspace();
+                if (navigating || navigation.SelectedIndex < 0) return;
+                var page = navigationPages[navigation.SelectedIndex];
+                Navigate(page == WorkflowPage.PersonalViews ? lastPersonalPage : page);
             };
 
             ConfigureFindingsGrid();
@@ -281,8 +338,14 @@ namespace FetchXmlLinter.XrmToolBox
             technicalSplit.Panel2.Controls.Add(Section("Collection log", outcome));
             technicalSplit.Visible = false;
             var resultCommands = Commands();
-            resultCommands.Controls.Add(new Label { Text = "Results for", AutoSize = true, Padding = new Padding(0, 6, 0, 0) });
+            resultContext.Font = new Font(Font, FontStyle.Bold);
+            resultCommands.Controls.Add(resultContext);
             resultCommands.Controls.Add(results);
+            EventHandler resizeResultSelector = (_, __) => results.Width = Math.Min(440, Math.Max(200,
+                resultCommands.ClientSize.Width - resultCommands.Padding.Horizontal - results.Margin.Horizontal -
+                resultCommands.Controls.Cast<Control>().Where(c => c != results).Sum(c => c.Width + c.Margin.Horizontal)));
+            resultCommands.SizeChanged += resizeResultSelector;
+            resultContext.SizeChanged += resizeResultSelector;
             resultCommands.Controls.Add(Action("Export JSON...", ExportJson, "Save all current analysis results, coverage, query shape and provenance as JSON. Review sensitive data before sharing."));
             resultCommands.Controls.Add(Action("Export CSV...", ExportCsv, "Save findings from all current analysis results as CSV. JSON includes fuller coverage and provenance."));
             foreach (var button in resultCommands.Controls.OfType<Button>())
@@ -311,7 +374,11 @@ namespace FetchXmlLinter.XrmToolBox
                 resultLayout.RowStyles[2].SizeType = showTechnical.Checked ? SizeType.Absolute : SizeType.Percent;
                 resultLayout.RowStyles[2].Height = showTechnical.Checked ? 140 : 100;
             };
-            workspace.Panel1.Controls.Add(inputs);
+            var inputWorkspace = new Panel { Dock = DockStyle.Fill };
+            inputWorkspace.Controls.Add(inputs);
+            inputWorkspace.Controls.Add(telemetrySteps);
+            inputWorkspace.Controls.Add(personalRoutes);
+            workspace.Panel1.Controls.Add(inputWorkspace);
             workspace.Panel2.Controls.Add(resultLayout);
             var body = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1 };
             body.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 205));
@@ -348,10 +415,36 @@ namespace FetchXmlLinter.XrmToolBox
             UpdateRuleScope(rules.CheckedItems.Count);
             UpdateUserCount();
             UpdateSelectionActions();
-            Navigate(WorkflowPage.UsageKql);
+            Navigate(WorkflowPage.PersonalViews);
         }
 
-        private void Navigate(WorkflowPage page) => navigation.SelectedIndex = (int)page;
+        private void Navigate(WorkflowPage page)
+        {
+            navigating = true;
+            try
+            {
+                var personal = page == WorkflowPage.PersonalViews || page == WorkflowPage.UsageKql || page == WorkflowPage.UsageCsv;
+                if (personal)
+                {
+                    lastPersonalPage = page;
+                    if (page != WorkflowPage.PersonalViews) telemetryRoute.Checked = true;
+                    if (telemetryRoute.Checked) lastTelemetryPage = page;
+                }
+                navigation.SelectedIndex = Array.IndexOf(navigationPages, personal ? WorkflowPage.PersonalViews : page);
+                foreach (var entry in pages) entry.Value.Visible = entry.Key == page;
+                personalRoutes.Visible = personal;
+                telemetrySteps.Visible = personal && telemetryRoute.Checked;
+                personalSelectors.Panel1Collapsed = telemetryRoute.Checked;
+                foreach (var step in telemetrySteps.Controls.OfType<Button>())
+                {
+                    var active = telemetrySteps.Controls.IndexOf(step) == (page == WorkflowPage.UsageKql ? 0 : page == WorkflowPage.UsageCsv ? 1 : 2);
+                    step.BackColor = active ? Color.FromArgb(224, 238, 251) : Color.White;
+                }
+                workspace.Panel2Collapsed = page == WorkflowPage.Rules || page == WorkflowPage.UsageKql;
+                PositionWorkspace();
+            }
+            finally { navigating = false; }
+        }
 
         private void PositionWorkspace()
         {
@@ -440,7 +533,9 @@ namespace FetchXmlLinter.XrmToolBox
             ruleDocumentationUrl = rule.DocumentationUrl;
             ruleDetail.Text = rule.Name + " (" + rule.Id + ") | " + rule.Group + Environment.NewLine + Environment.NewLine +
                 rule.Description + Environment.NewLine + Environment.NewLine + "Requirements" + Environment.NewLine +
-                rule.Requirements + Environment.NewLine + Environment.NewLine + "Limitations" + Environment.NewLine + rule.Limitation;
+                rule.Requirements + Environment.NewLine + Environment.NewLine + "Offline profiles: " +
+                (RuleCatalog.SupportsOfflineProfile(rule.Id) ? "Applicable to configured filters; benefit remains unmeasured." : "Skipped; online-query semantics are not assumed for offline profiles.") +
+                Environment.NewLine + Environment.NewLine + "Limitations" + Environment.NewLine + rule.Limitation;
         }
 
         private static void OpenDocumentation(string url)
@@ -501,12 +596,27 @@ namespace FetchXmlLinter.XrmToolBox
             return button;
         }
 
+        private void NewQuery()
+        {
+            xml.Clear();
+            layout.Clear();
+            includeLayout.Checked = false;
+            manualSurface = AnalysisSurface.OnlineQuery;
+            manualOfflineSource = null;
+            manualViewSource = null;
+            querySource.Text = "Source: supplied FetchXML";
+            status.Text = "Paste FetchXML or open a file. Online-query rules apply; existing results are unchanged.";
+        }
+
         private void OpenXml()
         {
             using (var dialog = new OpenFileDialog { Filter = "XML files|*.xml|All files|*.*" })
                 if (dialog.ShowDialog(this) == DialogResult.OK)
                 {
                     var warning = xml.LoadXml(ReadBounded(dialog.FileName, Linter.MaximumXmlCharacters));
+                    manualSurface = AnalysisSurface.OnlineQuery;
+                    manualOfflineSource = null;
+                    manualViewSource = null;
                     querySource.Text = "Source: " + Path.GetFileName(dialog.FileName);
                     status.Text = warning.Length == 0 ? "Opened and formatted XML locally. Click Analyse query to review it." : warning;
                 }
@@ -537,28 +647,33 @@ namespace FetchXmlLinter.XrmToolBox
             collectionOutcomes.Clear();
             outcome.Clear();
             var source = xml.Text;
+            var surface = manualSurface;
+            var offlineSource = manualOfflineSource;
+            var viewSource = manualViewSource;
+            var sourceName = offlineSource != null ? "Local offline filter - " + offlineSource.EntityName :
+                viewSource != null ? "Local personal view - " + viewSource.Name : "Supplied FetchXML";
             var suppliedLayout = includeLayout.Checked ? layout.Text : "";
-            if (connectedMetadata.Checked && RequiresMetadata(selectedRules))
+            if (connectedMetadata.Checked && RequiresMetadata(EffectiveRules(selectedRules, surface)))
             {
                 ExecuteWithConnection(() => Connected(reader =>
                 {
-                    var first = new Linter().Analyze(source, layoutXml: suppliedLayout, enabledRuleIds: selectedRules);
+                    var first = new Linter().Analyze(source, layoutXml: suppliedLayout, enabledRuleIds: selectedRules, surface: surface);
                     if (first.Status == AnalysisStatus.Invalid)
-                        return new AnalysisEntry { SourceName = "Manual FetchXML", Result = first, AnalysedAtUtc = DateTime.UtcNow };
+                        return new AnalysisEntry { SourceName = sourceName, Source = viewSource, OfflineSource = offlineSource, Result = first, AnalysedAtUtc = DateTime.UtcNow };
                     var errors = new List<string>();
                     var metadata = reader.GetMetadata(first.Tables, errors);
-                    var result = new Linter().Analyze(source, metadata, suppliedLayout, selectedRules);
+                    var result = new Linter().Analyze(source, metadata, suppliedLayout, selectedRules, surface);
                     ApplyMetadataErrors(result, errors);
-                    return new AnalysisEntry { SourceName = "Manual FetchXML", Result = result, AnalysedAtUtc = DateTime.UtcNow };
+                    return new AnalysisEntry { SourceName = sourceName, Source = viewSource, OfflineSource = offlineSource, Result = result, AnalysedAtUtc = DateTime.UtcNow };
                 }, entry => AddResults(new[] { entry }), "Analysing query"));
             }
             else
                 Run((token, progress) =>
                 {
                     token.ThrowIfCancellationRequested();
-                    var result = new Linter().Analyze(source, layoutXml: suppliedLayout, enabledRuleIds: selectedRules);
+                    var result = new Linter().Analyze(source, layoutXml: suppliedLayout, enabledRuleIds: selectedRules, surface: surface);
                     token.ThrowIfCancellationRequested();
-                    return new AnalysisEntry { SourceName = "Manual FetchXML", Result = result, AnalysedAtUtc = DateTime.UtcNow };
+                    return new AnalysisEntry { SourceName = sourceName, Source = viewSource, OfflineSource = offlineSource, Result = result, AnalysedAtUtc = DateTime.UtcNow };
                 }, entry => AddResults(new[] { entry }), "Analysing query");
         }
 
@@ -691,11 +806,14 @@ namespace FetchXmlLinter.XrmToolBox
                 return;
             }
             var source = (ViewSource)views.CheckedItems[0];
+            manualSurface = AnalysisSurface.OnlineQuery;
+            manualOfflineSource = null;
+            manualViewSource = source;
             var warnings = new[] { xml.LoadXml(source.Xml), layout.LoadXml(source.Layout) }.Where(w => w.Length > 0);
             includeLayout.Checked = !string.IsNullOrWhiteSpace(source.Layout);
             querySource.Text = "Source: personal view - " + source.Name;
             Navigate(WorkflowPage.ManualQuery);
-            status.Text = "Opened '" + source.Name + "' in Analyse a query. XML loaded only; click Analyse query to review it. " +
+            status.Text = "Opened '" + source.Name + "' in FetchXML query. XML loaded only; click Analyse query to review it. " +
                 string.Join(" ", warnings);
         }
 
@@ -793,6 +911,8 @@ namespace FetchXmlLinter.XrmToolBox
             connectedMetadata.Enabled = false;
             includeLayout.Enabled = false;
             navigation.Enabled = false;
+            personalRoutes.Enabled = telemetrySteps.Enabled = false;
+            offlineProfiles.Enabled = offlineItems.Enabled = generatedFilters.Enabled = false;
             cancel.Enabled = true;
             status.Text = operation + "...";
             Task<T>? task = null;
@@ -845,8 +965,11 @@ namespace FetchXmlLinter.XrmToolBox
                         connectedMetadata.Enabled = true;
                         includeLayout.Enabled = true;
                         navigation.Enabled = true;
+                        personalRoutes.Enabled = telemetrySteps.Enabled = true;
+                        offlineProfiles.Enabled = offlineItems.Enabled = generatedFilters.Enabled = true;
                         cancel.Enabled = false;
                         UpdateSelectionActions();
+                        UpdateOfflineActions();
                     }
                 }
             }
@@ -864,6 +987,7 @@ namespace FetchXmlLinter.XrmToolBox
             users.Items.Clear();
             views.Items.Clear();
             shortlist.Items.Clear();
+            ClearOfflineState();
             ClearAnalysis();
             collectionOutcomes.Clear();
             outcome.Clear();
@@ -891,7 +1015,8 @@ namespace FetchXmlLinter.XrmToolBox
             findings.Rows.Clear();
             detail.Clear();
             technical.Clear();
-            summary.Text = "No analysis yet. Select a query or personal views to review.";
+            resultContext.Text = "Results for";
+            summary.Text = "No analysis yet. Select personal views, offline filters or supplied FetchXML to review.";
             emptyFindings.Text = "Run an analysis to see findings here.";
             emptyFindings.Visible = true;
             findings.Visible = false;
@@ -901,6 +1026,8 @@ namespace FetchXmlLinter.XrmToolBox
         {
             if (!(results.SelectedItem is AnalysisEntry entry)) return;
             var result = entry.Result;
+            resultContext.Text = result.Surface == AnalysisSurface.OfflineProfile ? "Offline profile filter" :
+                entry.Source != null ? "Personal view" : "Supplied FetchXML";
             UpdateSummary();
             findings.Rows.Clear();
             foreach (var finding in result.Findings)
@@ -918,6 +1045,8 @@ namespace FetchXmlLinter.XrmToolBox
                     "This is a static review, not proof of query performance.");
             var text = new StringBuilder(entry.SourceName + Environment.NewLine + "Status: " + result.Status +
                 Environment.NewLine + "Selected rules: " + string.Join(", ", result.SelectedRuleIds) +
+                Environment.NewLine + "Analysis surface: " + result.Surface +
+                Environment.NewLine + "Skipped rules: " + string.Join(", ", result.SkippedRuleIds) +
                 Environment.NewLine + "Engine: " + result.EngineVersion +
                 Environment.NewLine + "SHA-256: " + result.SourceHash + Environment.NewLine);
             if (result.Shape is QueryShape shape)
@@ -1010,7 +1139,8 @@ namespace FetchXmlLinter.XrmToolBox
                     Definitions = entries.Select(e => new
                     {
                         e.SourceName, e.AnalysedAtUtc, ViewId = e.Source?.ViewId, OwnerId = e.Source?.OwnerId,
-                        ModifiedOnUtc = e.Source?.ModifiedOnUtc, Candidate = e.Source?.Candidate, e.Result
+                        ModifiedOnUtc = e.Source?.ModifiedOnUtc, Candidate = e.Source?.Candidate,
+                        e.OfflineSource, e.Result
                     })
                 };
                 File.WriteAllText(dialog.FileName, JsonConvert.SerializeObject(report, Formatting.Indented,
@@ -1025,16 +1155,18 @@ namespace FetchXmlLinter.XrmToolBox
             using (var dialog = new SaveFileDialog { Filter = "CSV findings|*.csv", FileName = "fetchxml-findings.csv" })
             {
                 if (dialog.ShowDialog(this) != DialogResult.OK) return;
-                var output = new StringBuilder("Source,Status,SourceHash,SelectedRules,RuleId,Category,Severity,Location,Evidence,Explanation,Recommendation,Limitation,DocumentationUrl\r\n");
+                var output = new StringBuilder("Source,Status,SourceHash,SelectedRules,RuleId,Category,Severity,Location,Evidence,Explanation,Recommendation,Limitation,DocumentationUrl,Surface,SkippedRules\r\n");
                 foreach (var entry in entries)
                 {
                     if (entry.Result.Findings.Count == 0)
                         output.AppendLine(string.Join(",", new[] { entry.SourceName, entry.Result.Status.ToString(), entry.Result.SourceHash, string.Join(";", entry.Result.SelectedRuleIds),
-                            "", "", "", "", entry.Result.Error, "", "", string.Join("; ", entry.Result.NotEvaluated), "" }.Select(ShortlistCsv.EncodeCell)));
+                            "", "", "", "", entry.Result.Error, "", "", string.Join("; ", entry.Result.NotEvaluated), "",
+                            entry.Result.Surface.ToString(), string.Join(";", entry.Result.SkippedRuleIds) }.Select(ShortlistCsv.EncodeCell)));
                     foreach (var finding in entry.Result.Findings)
                         output.AppendLine(string.Join(",", new[] { entry.SourceName, entry.Result.Status.ToString(), entry.Result.SourceHash, string.Join(";", entry.Result.SelectedRuleIds),
                             finding.RuleId, finding.Category.ToString(), finding.Severity.ToString(), finding.Location, finding.Evidence,
-                            finding.Explanation, finding.Recommendation, finding.Limitation, finding.DocumentationUrl }.Select(ShortlistCsv.EncodeCell)));
+                            finding.Explanation, finding.Recommendation, finding.Limitation, finding.DocumentationUrl,
+                            entry.Result.Surface.ToString(), string.Join(";", entry.Result.SkippedRuleIds) }.Select(ShortlistCsv.EncodeCell)));
                 }
                 File.WriteAllText(dialog.FileName, output.ToString(), new UTF8Encoding(true));
                 status.Text = "Findings CSV exported. JSON includes fuller coverage and telemetry provenance.";

@@ -9,7 +9,7 @@ Logs session separately, then import a CSV.
 1. Open **Logs on the intended Application Insights resource** with read/query
    access, rather than opening Logs on its linked Log Analytics workspace.
 2. Choose `kql\exact-view-markers.kql` or `kql\user-table-candidates.kql`
-   (also available under **1. Prepare usage KQL**).
+   (also available under **Personal views > Find candidates using telemetry > 1. Prepare KQL**).
 3. Choose a bounded time window. The selected Application Insights resource
    supplies the scope; no organization GUID placeholder is required. These
    templates assume a resource dedicated to the intended Dataverse organization.
@@ -38,8 +38,9 @@ templates are not written for that surface.
 
 UTC CSV timestamps concatenate literal `T` and `Z` outside `format_datetime`;
 putting them inside `"yyyy-MM-ddTHH:mm:ss.fffZ"` causes a Kusto format-parse
-error. A customer-neutral live export/import acceptance run remains a preview
-gate; do not claim the templates were validated on every deployment.
+error. The templates are schema-specific and are not validated against every
+deployment. Verify the exported identities, timings and imported scope before
+relying on a shortlist.
 
 ## Attribution and identity
 

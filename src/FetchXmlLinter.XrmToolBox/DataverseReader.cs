@@ -33,13 +33,16 @@ namespace FetchXmlLinter.XrmToolBox
     {
         public Guid ViewId { get; set; }
         public Guid OwnerId { get; set; }
+        public string OwnerName { get; set; } = "";
+        public string OwnerDisplayName => string.IsNullOrWhiteSpace(OwnerName) ? OwnerId.ToString() : OwnerName;
         public string Name { get; set; } = "";
         public string Xml { get; set; } = "";
         public string Layout { get; set; } = "";
         public string Table { get; set; } = "";
         public DateTime? ModifiedOnUtc { get; set; }
         public Candidate? Candidate { get; set; }
-        public override string ToString() => Name + " | " + Table + " | owner " + OwnerId +
+        public override string ToString() => Name + " | " + Table + " | owner " +
+            OwnerDisplayName +
             (Candidate == null ? "" : " | " + Candidate.Attribution + " | " + Candidate.MetricKind);
     }
 
@@ -65,7 +68,7 @@ namespace FetchXmlLinter.XrmToolBox
         public void Dispose() => client.Dispose();
     }
 
-    internal sealed class DataverseReader : IDisposable
+    internal sealed partial class DataverseReader : IDisposable
     {
         private readonly IDataverseSession session;
         private readonly IOrganizationService client;
@@ -181,7 +184,7 @@ namespace FetchXmlLinter.XrmToolBox
                             var page = Call(() => client.RetrieveMultiple(query));
                             owned.AddRange(page.Entities.Select(e => new ViewSource
                             {
-                                ViewId = e.Id, OwnerId = user.Id,
+                                ViewId = e.Id, OwnerId = user.Id, OwnerName = user.Name,
                                 Name = e.GetAttributeValue<string>("name") ?? e.Id.ToString(),
                                 Xml = e.GetAttributeValue<string>("fetchxml") ?? "",
                                 Table = new Linter().Analyze(e.GetAttributeValue<string>("fetchxml") ?? "").Table,
@@ -212,7 +215,7 @@ namespace FetchXmlLinter.XrmToolBox
                                         candidate.EntityName + "'. No broader selection was applied.");
                                 result.Views.AddRange(matches.Select(v => new ViewSource
                                 {
-                                    ViewId = v.ViewId, OwnerId = v.OwnerId, Name = v.Name,
+                                    ViewId = v.ViewId, OwnerId = v.OwnerId, OwnerName = v.OwnerName, Name = v.Name,
                                     Xml = v.Xml, Layout = v.Layout, Table = v.Table, ModifiedOnUtc = v.ModifiedOnUtc, Candidate = candidate
                                 }));
                             }

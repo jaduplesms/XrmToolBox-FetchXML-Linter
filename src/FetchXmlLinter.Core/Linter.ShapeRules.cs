@@ -54,7 +54,9 @@ namespace FetchXmlLinter.Core
                 Note("FXL010", root, shape.Joins + " joins: " + shape.InnerJoins + " inner, " + shape.OuterJoins +
                     " outer, " + shape.OtherJoins + " specialized",
                     "Multiple joins increase query complexity, but their cost depends on data and security.",
-                    "Review each relationship's purpose, selected columns and filtering before considering hints.",
+                    result.Surface == AnalysisSurface.OfflineProfile
+                        ? "Review each relationship's purpose and filtering while preserving offline data availability."
+                        : "Review each relationship's purpose, selected columns and filtering before considering hints.",
                     "Two joins is a review trigger, not a Microsoft performance threshold or proof of slowness.", Joins);
             if (shape.MaximumJoinDepth > 1)
                 Note("FXL011", root, "Maximum link nesting depth=" + shape.MaximumJoinDepth,

@@ -70,7 +70,7 @@ Enums serialize as names. Raw FetchXML and layout XML are not exported.
 `Complete`, `Incomplete` and `Invalid` are distinct. `Complete` covers only
 selected implemented checks, not all Dataverse validity/performance questions.
 Collection failures/cancellation must be considered alongside selected results.
-These are alpha contracts and may change before preview.
+These are early-preview contracts and may change before a stable release.
 
 ## Findings CSV
 

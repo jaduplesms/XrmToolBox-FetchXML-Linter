@@ -8,6 +8,54 @@ namespace FetchXmlLinter.Tests;
 public class LinterTests
 {
     [Fact]
+    public void OfflineFiltersSuppressOnlineAdviceButKeepFilterAndJoinReview()
+    {
+        const string xml = "<fetch distinct='true' options='HashJoin'><entity name='account'><all-attributes/>" +
+            "<filter><condition attribute='name' operator='like' value='%sample'/></filter>" +
+            "<link-entity name='contact' from='parentcustomerid' to='accountid' link-type='any'>" +
+            "<link-entity name='systemuser' from='systemuserid' to='ownerid' link-type='not any'/></link-entity></entity></fetch>";
+        var result = new Linter().Analyze(xml, surface: AnalysisSurface.OfflineProfile);
+        Assert.Equal(AnalysisSurface.OfflineProfile, result.Surface);
+        Assert.Equal(AnalysisStatus.Incomplete, result.Status);
+        Assert.Equal(RuleCatalog.All.Select(r => r.Id), result.SelectedRuleIds);
+        Assert.Contains("FXL001", result.SkippedRuleIds);
+        Assert.Contains("FXL008", result.SkippedRuleIds);
+        Assert.Contains("FXL016", result.SkippedRuleIds);
+        Assert.Contains(result.Findings, f => f.RuleId == "FXL002");
+        Assert.Contains(result.Findings, f => f.RuleId == "FXL010");
+        Assert.Contains(result.Findings, f => f.RuleId == "FXL011");
+        Assert.DoesNotContain(result.Findings, f => result.SkippedRuleIds.Contains(f.RuleId));
+        Assert.Equal(2, result.Shape!.OtherJoins);
+        Assert.DoesNotContain(result.NotEvaluated, s => s.Contains("Unexpanded all-column projection"));
+        Assert.Contains(result.NotEvaluated, s => s.Contains("Filter Columns"));
+        Assert.Contains(new Linter().Analyze(xml).Findings, f => f.RuleId == "FXL001");
+    }
+
+    [Fact]
+    public void OfflineSelectionWithNoApplicableRulesIsAnExplicitCoverageGap()
+    {
+        var result = new Linter().Analyze("<fetch><entity name='account'/></fetch>", new RejectMetadataReads(),
+            enabledRuleIds: new[] { "FXL005" }, surface: AnalysisSurface.OfflineProfile);
+        Assert.Equal(AnalysisStatus.Incomplete, result.Status);
+        Assert.Empty(result.Findings);
+        Assert.Equal(new[] { "FXL005" }, result.SelectedRuleIds);
+        Assert.Equal(new[] { "FXL005" }, result.SkippedRuleIds);
+        Assert.Contains(result.NotEvaluated, s => s.Contains("skipped"));
+    }
+
+    [Theory]
+    [InlineData("[\"\"]")]
+    [InlineData("<filter><condition attribute='name' operator='eq' value='a'/></filter>")]
+    [InlineData("<!DOCTYPE fetch [<!ENTITY x SYSTEM 'file:///never-read'>]><fetch>&x;</fetch>")]
+    public void OfflineContextNeverBypassesXmlSafetyOrInventsFetchXml(string xml)
+    {
+        var result = new Linter().Analyze(xml, surface: AnalysisSurface.OfflineProfile);
+        Assert.Equal(AnalysisStatus.Invalid, result.Status);
+        Assert.NotEmpty(result.Error);
+        Assert.Equal(AnalysisSurface.OfflineProfile, result.Surface);
+    }
+
+    [Fact]
     public void SelectedXmlRulesDoNotEvaluateDisabledMetadataChecks()
     {
         const string xml = "<fetch no-lock='true'><entity name='account'><filter>" +

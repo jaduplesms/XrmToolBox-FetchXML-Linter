@@ -2,6 +2,7 @@ param(
     [ValidateSet('Debug', 'Release')]
     [string]$Configuration = 'Release',
     [string]$InstalledPluginPath,
+    [string]$HostDirectory,
     [string]$ShortlistCsvPath,
     [string]$ScreenshotDirectory
 )
@@ -12,7 +13,10 @@ if ($PSVersionTable.PSEdition -ne 'Desktop') {
 }
 $root = Split-Path $PSScriptRoot -Parent
 $runtime = Join-Path $root "src\FetchXmlLinter.XrmToolBox\bin\$Configuration\net48"
-$pluginPath = Join-Path $runtime 'FetchXmlLinter.XrmToolBox.dll'
+$pluginPath = Join-Path $runtime 'plugin\FetchXmlLinter.XrmToolBox.dll'
+if ($HostDirectory) {
+    $runtime = (Resolve-Path -LiteralPath $HostDirectory).Path
+}
 if ($InstalledPluginPath) {
     $pluginPath = (Resolve-Path -LiteralPath $InstalledPluginPath).Path
 }
@@ -33,12 +37,28 @@ $form = $null
 $control = $null
 try {
     Add-Type -AssemblyName System.Windows.Forms
+    Add-Type -AssemblyName System.ComponentModel.Composition
     $assembly = if ($InstalledPluginPath) {
         [System.Reflection.Assembly]::LoadFrom($pluginPath)
     } else {
         [System.Reflection.Assembly]::Load([IO.File]::ReadAllBytes($pluginPath))
     }
-    $plugin = $assembly.CreateInstance('FetchXmlLinter.XrmToolBox.Plugin')
+    if ($assembly.GetReferencedAssemblies().Name -contains 'FetchXmlLinter.Core') {
+        throw 'The distributable still references a separate FetchXmlLinter.Core assembly.'
+    }
+    $null = $assembly.GetTypes()
+    $catalog = [System.ComponentModel.Composition.Hosting.AssemblyCatalog]::new($assembly)
+    $container = [System.ComponentModel.Composition.Hosting.CompositionContainer]::new($catalog)
+    try {
+        $pluginExports = @($container.GetExports([XrmToolBox.Extensibility.Interfaces.IXrmToolBoxPlugin],
+            [System.Collections.Generic.IDictionary[string,object]], $null))
+        if ($pluginExports.Count -ne 1) { throw 'Cold MEF discovery did not find exactly one plugin.' }
+        $plugin = $pluginExports[0].Value
+    }
+    finally {
+        $container.Dispose()
+        $catalog.Dispose()
+    }
     $control = $plugin.GetControl()
     $form = [System.Windows.Forms.Form]::new()
     $form.Text = 'FetchXML Linter - disconnected smoke check'
@@ -137,9 +157,16 @@ namespace FetchXmlLinter {
     }
     $all = @(Get-Descendants $control)
     $navigation = @($all | Where-Object AccessibleName -eq 'Task navigation')[0]
-    if ($navigation.Items.Count -ne 5 -or $navigation.SelectedIndex -ne 0) { throw 'Workflow navigation did not start at Prepare usage KQL.' }
-    Save-Preview 'prepare-kql'
-    $navigation.SelectedIndex = 3
+    if (($navigation.Items -join '|') -ne 'Personal views|Offline profiles|FetchXML query|Analysis rules' -or
+        $navigation.SelectedItem -ne 'Personal views') { throw 'Intent navigation did not start at Personal views.' }
+    $browseRoute = @($all | Where-Object AccessibleName -eq 'Browse views')[0]
+    $telemetryRoute = @($all | Where-Object AccessibleName -eq 'Find candidates using telemetry')[0]
+    $prepareStep = @($all | Where-Object AccessibleName -eq '1. Prepare KQL')[0]
+    $importStep = @($all | Where-Object AccessibleName -eq '2. Import CSV')[0]
+    $reviewStep = @($all | Where-Object AccessibleName -eq '3. Review views')[0]
+    if (-not $browseRoute.Checked -or $prepareStep.Visible) { throw 'Direct browsing must not require telemetry steps.' }
+    Save-Preview 'personal-views-start'
+    $navigation.SelectedItem = 'FetchXML query'
     [System.Windows.Forms.Application]::DoEvents()
     $logo = @($all | Where-Object AccessibleName -eq 'FetchXML Linter logo')[0]
     if (-not $logo.Visible -or -not $logo.Image -or $logo.Image.Width -ne 80 -or $logo.Image.Height -ne 80) {
@@ -148,6 +175,9 @@ namespace FetchXmlLinter {
     $editor = @($all | Where-Object AccessibleName -eq 'FetchXML')[0]
     $button = @($all | Where-Object AccessibleName -eq 'Analyse query')[0]
     $list = @($all | Where-Object AccessibleName -eq 'Analysis results')[0]
+    if ($list.Width -lt 400 -or $list.DropDownWidth -lt 700) {
+        throw 'The analysis results selector is too narrow for longer view names.'
+    }
     $editor.Text = "<fetch><entity name='account'><attribute name='name'/><filter><condition attribute='name' operator='like' value='%synthetic'/></filter></entity></fetch>"
     $format = @($all | Where-Object AccessibleName -eq 'Format XML')[0]
     $format.PerformClick()
@@ -160,6 +190,8 @@ namespace FetchXmlLinter {
     if ($list.Items.Count -ne 1 -or $list.Items[0].Result.Findings.RuleId -notcontains 'FXL002') {
         throw 'Disconnected manual linting did not produce the expected evidence.'
     }
+    $context = @($all | Where-Object AccessibleName -eq 'Analysis context')[0]
+    if ($context.Text -ne 'Supplied FetchXML') { throw 'Supplied-query result context was not shown.' }
     $grid = @($all | Where-Object AccessibleName -eq 'Findings')[0]
     $explanation = @($all | Where-Object AccessibleName -eq 'Finding explanation and next steps')[0]
     if ($grid.Rows.Count -ne 1 -or $explanation.Text -notmatch 'Leading-wildcard filtering') {
@@ -176,7 +208,7 @@ namespace FetchXmlLinter {
     }
     Save-Preview 'query-and-layout'
     $includeLayout.Checked = $false
-    $core = @([AppDomain]::CurrentDomain.GetAssemblies() | Where-Object { $_.GetName().Name -eq 'FetchXmlLinter.Core' })[0]
+    $core = $assembly
     $csv = "SchemaVersion,UserId,UserIdType,ViewId,Attribution,EntityName,WindowStartUtc,WindowEndUtc,SampleCount,P95Ms,MetricKind`n" +
         '1,22222222-2222-2222-2222-222222222222,DataverseSystemUserId,33333333-3333-3333-3333-333333333333,ExactViewMarker,account,,,,,'
     if ($ShortlistCsvPath) {
@@ -190,17 +222,17 @@ namespace FetchXmlLinter {
         @($shortlist.Candidates | Where-Object OrganizationId -ne $organization).Count -gt 0) {
         throw "The plugin's loaded importer rejected organization-free CSV: $($shortlist.Errors -join '; ')"
     }
-    if (-not $core -or $core.Location) {
-        throw 'The core library was not loaded from the plugin embedded resource.'
+    if (@([AppDomain]::CurrentDomain.GetAssemblies() | Where-Object { $_.GetName().Name -eq 'FetchXmlLinter.Core' }).Count -ne 0) {
+        throw 'The distributable loaded a separate core library instead of its merged implementation.'
     }
-    Write-Output "Loaded embedded core $($core.GetName().Version): $($shortlist.Candidates.Count) CSV candidates accepted, no errors."
-    $navigation.SelectedIndex = 4
+    Write-Output "Cold MEF discovery and merged core $($core.GetName().Version): $($shortlist.Candidates.Count) CSV candidates accepted, no errors."
+    $navigation.SelectedItem = 'Analysis rules'
     [System.Windows.Forms.Application]::DoEvents()
     $clear = @($all | Where-Object AccessibleName -eq 'Clear all')[0]
     $clear.PerformClick()
-    $navigation.SelectedIndex = 3
+    $navigation.SelectedItem = 'FetchXML query'
     $button.PerformClick()
-    if ($navigation.SelectedIndex -ne 4 -or $list.Items.Count -ne 1) {
+    if ($navigation.SelectedItem -ne 'Analysis rules' -or $list.Items.Count -ne 1) {
         throw 'An empty rule selection was not blocked without replacing existing results.'
     }
     $rules = @($all | Where-Object AccessibleName -eq 'Enabled analysis rules')[0]
@@ -208,7 +240,7 @@ namespace FetchXmlLinter {
         $rules.SetItemChecked($index, $rules.Items[$index].Id -eq 'FXL002')
     }
     Save-Preview 'analysis-rules'
-    $navigation.SelectedIndex = 3
+    $navigation.SelectedItem = 'FetchXML query'
     $button.PerformClick()
     Wait-Operation
     if ($list.Items[0].Result.Status.ToString() -ne 'Complete' -or
@@ -221,7 +253,7 @@ namespace FetchXmlLinter {
         param($sender, $eventArgs)
         $requests.Add($eventArgs)
     })
-    $navigation.SelectedIndex = 2
+    $navigation.SelectedItem = 'Personal views'
     [System.Windows.Forms.Application]::DoEvents()
     $search = @($all | Where-Object AccessibleName -eq 'Filter users')[0]
     $search.Text = 'a'
@@ -287,19 +319,39 @@ namespace FetchXmlLinter {
     [System.Windows.Forms.Application]::DoEvents()
     $resizedRatio = $workspace.SplitterDistance / ($workspace.Height - $workspace.SplitterWidth)
     if ([Math]::Abs($resizedRatio - $adjustedRatio) -gt 0.01) { throw 'Resizing lost the manually adjusted splitter ratio.' }
-    $navigation.SelectedIndex = 0
-    $navigation.SelectedIndex = 2
+    $navigation.SelectedItem = 'Offline profiles'
+    $navigation.SelectedItem = 'Personal views'
     [System.Windows.Forms.Application]::DoEvents()
     $returnedRatio = $workspace.SplitterDistance / ($workspace.Height - $workspace.SplitterWidth)
     if ([Math]::Abs($returnedRatio - $adjustedRatio) -gt 0.01) { throw 'Navigation lost the manually adjusted splitter ratio.' }
     $workspace.SplitterDistance = [int](($workspace.Height - $workspace.SplitterWidth) * 0.6)
-    $navigation.SelectedIndex = 1
+    $telemetryRoute.Checked = $true
+    $importStep.PerformClick()
     [System.Windows.Forms.Application]::DoEvents()
     $matching = @($all | Where-Object AccessibleName -eq 'Load matching views')[0]
     if ($matching.Enabled) { throw 'Load matching views must be disabled before candidates are checked.' }
     Save-Preview 'usage-csv'
-    $navigation.SelectedIndex = 0
+    $navigation.SelectedItem = 'FetchXML query'
+    $navigation.SelectedItem = 'Personal views'
+    if (-not $telemetryRoute.Checked -or -not $importStep.Visible -or
+        -not (@($all | Where-Object AccessibleName -eq 'Validated CSV candidates')[0]).Visible) {
+        throw 'Returning to Personal views lost the telemetry route or CSV step.'
+    }
+    $reviewStep.PerformClick()
+    if (-not $viewList.Visible -or -not $usersList.GetItemChecked(0)) {
+        throw 'Telemetry review did not converge on the existing view workspace and selection.'
+    }
+    Save-Preview 'telemetry-review'
+    $form.Size = [System.Drawing.Size]::new(850, 650)
     [System.Windows.Forms.Application]::DoEvents()
+    Save-Preview 'compact-telemetry-review'
+    if ($viewList.Height -lt 50 -or $usersList.Visible) {
+        throw "Compact telemetry review must retain usable views without the unrelated user picker: views=$($viewList.Height)."
+    }
+    $form.Size = [System.Drawing.Size]::new(1100, 850)
+    $prepareStep.PerformClick()
+    [System.Windows.Forms.Application]::DoEvents()
+    Save-Preview 'prepare-kql'
     $kql = @($all | Where-Object { $_ -is [System.Windows.Forms.TextBox] -and $_.AccessibleName -eq 'KQL template' })[0]
     $templates = @($all | Where-Object { $_ -is [System.Windows.Forms.ComboBox] -and $_.AccessibleName -eq 'KQL template' })[0]
     for ($index = 0; $index -lt $templates.Items.Count; $index++) {
@@ -312,14 +364,19 @@ namespace FetchXmlLinter {
         }
     }
     $form.Size = [System.Drawing.Size]::new(850, 650)
-    $navigation.SelectedIndex = 3
+    $navigation.SelectedItem = 'FetchXML query'
     [System.Windows.Forms.Application]::DoEvents()
     Save-Preview 'compact-results'
     if (-not $grid.Visible -or $grid.Height -lt 85 -or $editor.Height -lt 50) {
-        throw "The compact layout did not retain usable query and results areas: grid=$($grid.Size), editor=$($editor.Size)."
+        $toolbar = ($list.Parent.Controls | ForEach-Object { "$($_.AccessibleName)=$($_.Bounds)" }) -join '; '
+        throw "The compact layout did not retain usable query and results areas: grid=$($grid.Size), editor=$($editor.Size), toolbar=$($list.Parent.Size): $toolbar."
     }
     $changeRules = @($all | Where-Object AccessibleName -eq 'Change rules')[0]
-    foreach ($element in @($grid, $editor, $changeRules, $explanation, $logo)) {
+    $exports = @($all | Where-Object { $_.AccessibleName -in @('Export JSON...', 'Export CSV...') })
+    if ($list.Width -lt 240) {
+        throw 'The compact analysis results selector has become narrower than the previous layout.'
+    }
+    foreach ($element in (@($grid, $editor, $changeRules, $explanation, $logo, $list) + $exports)) {
         $bounds = $control.RectangleToClient($element.RectangleToScreen($element.ClientRectangle))
         if (-not $control.ClientRectangle.Contains($bounds)) {
             throw "A compact-layout control was clipped: $($element.AccessibleName)"
@@ -329,6 +386,52 @@ namespace FetchXmlLinter {
     if ($logo.Right -gt $title.Left -or $title.Right -gt $changeRules.Parent.Left) {
         throw 'The compact header logo, title and commands overlap.'
     }
+    $navigation.SelectedItem = 'Offline profiles'
+    $profiles = @($all | Where-Object AccessibleName -eq 'Offline profiles')[0]
+    $profile = [Activator]::CreateInstance($assembly.GetType('FetchXmlLinter.XrmToolBox.OfflineProfile'), $true)
+    $profile.Id = [Guid]::NewGuid()
+    $profile.Name = 'Synthetic mobile profile'
+    $profiles.Items.Add($profile) | Out-Null
+    $profiles.SelectedIndex = 0
+    $items = @($all | Where-Object AccessibleName -eq 'Offline profile tables')[0]
+    $item = [Activator]::CreateInstance($assembly.GetType('FetchXmlLinter.XrmToolBox.OfflineProfileItem'), $true)
+    $item.Id = [Guid]::NewGuid()
+    $item.ProfileId = $profile.Id
+    $item.ProfileName = $profile.Name
+    $item.EntityName = 'account'
+    $item.DistributionCriteria = 3
+    $item.ConfiguredXml = "<fetch><entity name='account'><all-attributes/><filter><condition attribute='name' operator='like' value='%sample'/></filter><link-entity name='contact' from='parentcustomerid' to='accountid' link-type='any'/></entity></fetch>"
+    $items.Items.Add($item, $true) | Out-Null
+    $items.SelectedIndex = 0
+    $offlineAnalyse = @($all | Where-Object AccessibleName -eq 'Analyse tables')[0]
+    $offlineAnalyse.PerformClick()
+    Wait-Operation
+    if ($list.Items.Count -ne 1 -or $list.Items[0].Result.Surface.ToString() -ne 'OfflineProfile' -or
+        $list.Items[0].Result.Findings.RuleId -notcontains 'FXL002') {
+        throw 'Offline filters were not analysed with explicit offline provenance.'
+    }
+    if ($context.Text -ne 'Offline profile filter') { throw 'Offline result context was not retained.' }
+    [System.Windows.Forms.Application]::DoEvents()
+    $offlineSelectors = @($all | Where-Object AccessibleName -eq 'Offline profile selectors')[0]
+    Save-Preview 'compact-offline-profiles'
+    if ($items.Height -lt 50) {
+        throw "Compact offline table picker is too short: $($items.Size); selectors=$($offlineSelectors.Size); parent=$($items.Parent.Size)."
+    }
+    $analysisBounds = $items.Parent.RectangleToClient($offlineAnalyse.RectangleToScreen($offlineAnalyse.ClientRectangle))
+    if ($offlineAnalyse.Parent.Parent -ne $items.Parent -or $analysisBounds.Top -lt $items.Bottom) {
+        throw 'Analyse tables must appear below the offline table checklist in the same selector panel.'
+    }
+    foreach ($name in @('Load tables', 'Open filter XML', 'Analyse tables', 'Load generated definitions')) {
+        $action = @($all | Where-Object AccessibleName -eq $name)[0]
+        $bounds = $control.RectangleToClient($action.RectangleToScreen($action.ClientRectangle))
+        if (-not $action.Visible -or -not $control.ClientRectangle.Contains($bounds)) {
+            throw "A compact offline action is clipped: $name"
+        }
+    }
+    $form.Size = [System.Drawing.Size]::new(1100, 850)
+    [System.Windows.Forms.Application]::DoEvents()
+    Save-Preview 'offline-profiles'
+    $navigation.SelectedItem = 'FetchXML query'
     $toggle = @($all | Where-Object AccessibleName -eq 'Show technical details')[0]
     $toggle.Checked = $true
     [System.Windows.Forms.Application]::DoEvents()
@@ -336,7 +439,7 @@ namespace FetchXmlLinter {
     if (-not $technical.Visible -or $technical.Text -notmatch 'SHA-256:') {
         throw 'Progressive technical details did not reveal source evidence.'
     }
-    Write-Output 'Host check passed: findings/details, rule selection, CSV, embedded core, 10,001-user local filtering/hidden selection, task navigation, connection callback, KQL, compact layout and disposal.'
+    Write-Output 'Host check passed: cold MEF discovery, findings/details, rule selection, CSV, merged core, 10,001-user local filtering/hidden selection, task navigation, connection callback, KQL, offline filters/provenance, compact layout and disposal.'
 }
 finally {
     if ($form) { $form.Dispose() }

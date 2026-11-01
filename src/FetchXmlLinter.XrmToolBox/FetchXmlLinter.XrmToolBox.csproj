@@ -3,12 +3,13 @@
     <TargetFramework>net48</TargetFramework>
     <UseWindowsForms>true</UseWindowsForms>
     <AssemblyName>FetchXmlLinter.XrmToolBox</AssemblyName>
-    <Description>Read-only FetchXML linting and personal-view review for XrmToolBox.</Description>
+    <Description>Read-only review of personal views, offline-profile filters and supplied FetchXML for XrmToolBox.</Description>
     <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
     <NuspecFile>..\..\packaging\FetchXmlLinter.XrmToolBox.nuspec</NuspecFile>
     <NuspecBasePath>$(MSBuildThisFileDirectory)..\..</NuspecBasePath>
     <NuspecProperties>version=$(Version);configuration=$(Configuration)</NuspecProperties>
     <PackageOutputPath>..\..\artifacts</PackageOutputPath>
+    <ILRepackTargetsFile>$(MSBuildProjectDirectory)\ILRepack.targets</ILRepackTargetsFile>
   </PropertyGroup>
   <ItemGroup>
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
@@ -17,11 +18,10 @@
     <PackageReference Include="XrmToolBoxPackage" Version="1.2025.10.74" PrivateAssets="all" />
     <PackageReference Include="MscrmTools.Xrm.Connection" Version="1.2025.9.64" PrivateAssets="all" />
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+    <PackageReference Include="ILRepack.Lib.MSBuild.Task" Version="2.0.48" PrivateAssets="all" />
     <ProjectReference Include="..\FetchXmlLinter.Core\FetchXmlLinter.Core.csproj" />
     <Reference Include="System.ComponentModel.Composition" />
     <Reference Include="Microsoft.VisualBasic" />
-    <EmbeddedResource Include="..\FetchXmlLinter.Core\bin\$(Configuration)\netstandard2.0\FetchXmlLinter.Core.dll"
-                      LogicalName="FetchXmlLinter.Core.dll" />
     <EmbeddedResource Include="..\..\kql\*.kql" />
   </ItemGroup>
 </Project>

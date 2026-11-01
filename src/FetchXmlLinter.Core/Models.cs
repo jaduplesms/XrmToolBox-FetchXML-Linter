@@ -7,6 +7,7 @@ namespace FetchXmlLinter.Core
     public enum FindingCategory { Structural, DocumentedRisk, ContextualReview }
     public enum Severity { Information, Warning, Error }
     public enum ColumnKind { Other, String, Memo, Choice, Lookup }
+    public enum AnalysisSurface { OnlineQuery, OfflineProfile }
 
     public sealed class ColumnMetadata
     {
@@ -57,8 +58,10 @@ namespace FetchXmlLinter.Core
 
     public sealed class AnalysisResult
     {
-        public string EngineVersion { get; } = "0.1.0-alpha.10";
+        public string EngineVersion { get; } = "0.1.0";
+        public AnalysisSurface Surface { get; set; }
         public List<string> SelectedRuleIds { get; } = new List<string>();
+        public List<string> SkippedRuleIds { get; } = new List<string>();
         public AnalysisStatus Status { get; set; } = AnalysisStatus.Complete;
         public string SourceHash { get; set; } = "";
         public string Table { get; set; } = "";

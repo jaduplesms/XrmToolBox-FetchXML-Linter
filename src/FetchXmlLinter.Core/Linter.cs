@@ -22,13 +22,22 @@ namespace FetchXmlLinter.Core
         };
 
         public AnalysisResult Analyze(string xml, IMetadataProvider? metadata = null, string? layoutXml = null,
-            IEnumerable<string>? enabledRuleIds = null)
+            IEnumerable<string>? enabledRuleIds = null, AnalysisSurface surface = AnalysisSurface.OnlineQuery)
         {
             var enabled = new HashSet<string>(enabledRuleIds ?? RuleCatalog.All.Select(r => r.Id), StringComparer.Ordinal);
             if (enabled.Count == 0 || enabled.Any(id => !RuleCatalog.All.Any(r => r.Id == id)))
                 throw new ArgumentException("Select at least one known rule ID from the rule catalog.", nameof(enabledRuleIds));
-            var result = new AnalysisResult();
+            var result = new AnalysisResult { Surface = surface };
             result.SelectedRuleIds.AddRange(RuleCatalog.All.Where(r => enabled.Contains(r.Id)).Select(r => r.Id));
+            if (surface == AnalysisSurface.OfflineProfile)
+            {
+                result.SkippedRuleIds.AddRange(result.SelectedRuleIds.Where(id => !RuleCatalog.SupportsOfflineProfile(id)));
+                enabled.ExceptWith(result.SkippedRuleIds);
+                Incomplete(result, "Offline profile review covers configured filters only. Downloaded columns come from Filter Columns, not FetchXML projection. Relationship scope, row volume, device SQL and sync benefit are not evaluated.");
+                if (result.SkippedRuleIds.Count > 0)
+                    Incomplete(result, "Online projection, sorting, paging, hint and unsupported join rules skipped for offline profiles: " +
+                        string.Join(", ", result.SkippedRuleIds));
+            }
             if (xml == null || xml.Length == 0 || xml.Length > MaximumXmlCharacters)
             {
                 result.Status = AnalysisStatus.Invalid;

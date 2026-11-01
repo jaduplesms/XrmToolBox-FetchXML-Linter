@@ -9,6 +9,7 @@ using Microsoft.Xrm.Sdk;
 using Microsoft.Xrm.Sdk.Messages;
 using Microsoft.Xrm.Sdk.Metadata;
 using Microsoft.Xrm.Sdk.Query;
+using Newtonsoft.Json;
 using Xunit;
 
 namespace FetchXmlLinter.Host.Tests
@@ -17,6 +18,191 @@ namespace FetchXmlLinter.Host.Tests
     {
         private static DataverseReader Reader(FakeSession session, CancellationToken token = default) =>
             new DataverseReader(session, token, new ImmediateProgress());
+
+        [Fact]
+        public void OfflineProvenanceExportOmitsQueryBodiesAndRawRelationshipConfiguration()
+        {
+            var item = new OfflineProfileItem
+            {
+                Id = Guid.NewGuid(), ProfileId = Guid.NewGuid(), EntityName = "account",
+                ConfiguredXml = "<fetch><entity name='account'/></fetch>", ReferencedViewXml = "referenced query body",
+                ViewQuery = "select accountid from account", RelationshipData = "private relationship blob",
+                SelectedColumns = "[\"name\"]"
+            };
+            var report = JsonConvert.SerializeObject(item);
+            Assert.Contains(item.Id.ToString(), report);
+            Assert.Contains("profileitementityfilter", report);
+            Assert.Contains("SelectedColumns", report);
+            Assert.DoesNotContain("<fetch", report);
+            Assert.DoesNotContain("referenced query body", report);
+            Assert.DoesNotContain("select accountid", report);
+            Assert.DoesNotContain("private relationship blob", report);
+        }
+
+        [Fact]
+        public void PagesOfflineProfilesAndItemsWithoutImpersonationOrDefinitionExecution()
+        {
+            var profileId = Guid.NewGuid();
+            var reads = 0;
+            var session = new FakeSession();
+            var caller = session.CallerId;
+            session.ReadDefinitions = query =>
+            {
+                Assert.Null(query.TopCount);
+                Assert.False(query.ColumnSet.AllColumns);
+                Assert.Equal(250, query.PageInfo.Count);
+                Assert.Equal(caller, session.CallerId);
+                reads++;
+                if (query.EntityName == "mobileofflineprofile")
+                {
+                    if (query.PageInfo.PageNumber == 1)
+                        return Page(new Entity(query.EntityName, profileId) { ["name"] = "Synthetic profile", ["isvalidated"] = true }, true, "next");
+                    Assert.Equal(2, query.PageInfo.PageNumber);
+                    Assert.Equal("next", query.PageInfo.PagingCookie);
+                    return Page(new Entity(query.EntityName, Guid.NewGuid()) { ["name"] = "Second profile" });
+                }
+                Assert.Equal("mobileofflineprofileitem", query.EntityName);
+                Assert.Contains(query.Criteria.Conditions, c => c.AttributeName == "regardingobjectid" && Equals(c.Values.Single(), profileId));
+                return Page(new Entity(query.EntityName, Guid.NewGuid())
+                {
+                    ["selectedentitytypecode"] = "account", ["recorddistributioncriteria"] = new OptionSetValue(3),
+                    ["profileitementityfilter"] = "<fetch><entity name='account'><all-attributes/></entity></fetch>",
+                    ["selectedcolumns"] = "[\"name\"]", ["recordsownedbyme"] = true
+                });
+            };
+            using (var reader = Reader(session))
+            {
+                var profiles = reader.LoadOfflineProfiles();
+                Assert.Equal(2, profiles.Count);
+                var item = Assert.Single(reader.LoadOfflineItems(profiles[0]));
+                Assert.Equal(profileId, item.ProfileId);
+                Assert.True(item.OwnedByMe);
+                Assert.Equal("[\"name\"]", item.SelectedColumns);
+                Assert.Equal("profileitementityfilter", item.SourceField);
+                Assert.Equal(3, reads);
+                Assert.Empty(session.FetchReads);
+                Assert.Equal(caller, session.CallerId);
+            }
+        }
+
+        [Fact]
+        public void PagesGeneratedDefinitionsScopedToBothProfileAndItemAndPreservesPlaceholdersAndSql()
+        {
+            var item = new OfflineProfileItem { Id = Guid.NewGuid(), ProfileId = Guid.NewGuid() };
+            var session = new FakeSession();
+            var reads = 0;
+            session.ReadDefinitions = query =>
+            {
+                Assert.Equal("mobileofflineprofileitemfilter", query.EntityName);
+                Assert.Contains(query.Criteria.Conditions, c => c.AttributeName == "mobileofflineprofileid" && Equals(c.Values.Single(), item.ProfileId));
+                Assert.Contains(query.Criteria.Conditions, c => c.AttributeName == "mobileofflineprofileitemid" && Equals(c.Values.Single(), item.Id));
+                Assert.Contains("outerfetchXml", query.ColumnSet.Columns);
+                reads++;
+                if (reads == 2) Assert.Equal("generated-next", query.PageInfo.PagingCookie);
+                return Page(new Entity(query.EntityName, Guid.NewGuid())
+                {
+                    ["returnedtypecode"] = "account", ["type"] = new OptionSetValue(2), ["subtype"] = new OptionSetValue(5),
+                    ["fetchxml"] = "[\"\"]", ["outerfetchXml"] = "<fetch><entity name='account'/></fetch>",
+                    ["offlinesql"] = "/*SelectStart*/ select [accountid] from account"
+                }, reads == 1, reads == 1 ? "generated-next" : null);
+            };
+            using (var reader = Reader(session))
+            {
+                var filters = reader.LoadOfflineGeneratedFilters(item);
+                Assert.Equal(2, filters.Count);
+                Assert.All(filters, f =>
+                {
+                    Assert.Equal("[\"\"]", f.FetchXml);
+                    Assert.StartsWith("/*SelectStart*/", f.OfflineSql);
+                    Assert.StartsWith("<fetch>", f.OuterFetchXml);
+                    Assert.Equal(2, f.Type);
+                    Assert.Equal(5, f.Subtype);
+                });
+                Assert.Empty(session.FetchReads);
+            }
+        }
+
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public void OfflinePagingCancellationOrRepeatedCookieNeverReturnsACompletePartialList(bool cancel)
+        {
+            using (var cancellation = new CancellationTokenSource())
+            {
+                var session = new FakeSession();
+                session.ReadDefinitions = query =>
+                {
+                    if (cancel) cancellation.Cancel();
+                    return Page(new Entity(query.EntityName, Guid.NewGuid()) { ["name"] = "Synthetic" }, true, "repeat");
+                };
+                using (var reader = Reader(session, cancellation.Token))
+                {
+                    if (cancel) Assert.Throws<OperationCanceledException>(() => reader.LoadOfflineProfiles());
+                    else Assert.Throws<InvalidOperationException>(() => reader.LoadOfflineProfiles());
+                }
+            }
+        }
+
+        [Fact]
+        public void MissingConfiguredFilterResolvesReferencedViewButNeverUsesViewQueryAsXml()
+        {
+            var viewId = Guid.NewGuid();
+            var session = new FakeSession
+            {
+                ReadDefinitions = query =>
+                {
+                    var page = Page(new Entity(query.EntityName, Guid.NewGuid())
+                    {
+                        ["selectedentitytypecode"] = "account", ["profileitemrule"] = new EntityReference("savedquery", viewId),
+                        ["viewquery"] = "select accountid from account"
+                    });
+                    page.Entities.Add(new Entity(query.EntityName, Guid.NewGuid())
+                    {
+                        ["selectedentitytypecode"] = "contact", ["recorddistributioncriteria"] = new OptionSetValue(0),
+                        ["viewquery"] = "select contactid from contact"
+                    });
+                    return page;
+                },
+                ReadRecord = (table, id, columns) =>
+                {
+                    Assert.Equal("savedquery", table);
+                    Assert.Equal(viewId, id);
+                    Assert.Equal(new[] { "fetchxml" }, columns.Columns);
+                    return new Entity(table, id) { ["fetchxml"] = "<fetch><entity name='account'/></fetch>" };
+                }
+            };
+            using (var reader = Reader(session))
+            {
+                var items = reader.LoadOfflineItems(new OfflineProfile { Id = Guid.NewGuid() });
+                Assert.StartsWith("<fetch>", items[0].Xml);
+                Assert.Contains("savedquery", items[0].SourceField);
+                Assert.Empty(items[1].Xml);
+                Assert.Equal("Related rows only", items[1].Distribution);
+            }
+        }
+
+        [Fact]
+        public void OfflineReferenceAndGeneratedPermissionFailuresRemainExplicit()
+        {
+            var session = new FakeSession
+            {
+                ReadDefinitions = query => Page(new Entity(query.EntityName, Guid.NewGuid())
+                {
+                    ["profileitemrule"] = new EntityReference("savedquery", Guid.NewGuid())
+                }),
+                ReadRecord = (_, __, ___) => throw new FaultException<OrganizationServiceFault>(
+                    new OrganizationServiceFault { Message = "View read denied" })
+            };
+            using (var reader = Reader(session))
+            {
+                var item = Assert.Single(reader.LoadOfflineItems(new OfflineProfile { Id = Guid.NewGuid() }));
+                Assert.Empty(item.Xml);
+                Assert.Contains("View read denied", item.ReferencedViewError);
+                session.ReadDefinitions = _ => throw new FaultException<OrganizationServiceFault>(
+                    new OrganizationServiceFault { Message = "Generated read denied" });
+                Assert.Throws<FaultException<OrganizationServiceFault>>(() => reader.LoadOfflineGeneratedFilters(item));
+            }
+        }
 
         [Fact]
         public void LoadsMoreThanTenThousandUsersWithMinimalColumnsAndPaging()
@@ -143,6 +329,47 @@ namespace FetchXmlLinter.Host.Tests
         }
 
         [Fact]
+        public void MultipleUsersCollectTheirOwnedViewsWithReadableOwnerNames()
+        {
+            var first = new UserTarget { Id = Guid.NewGuid(), Name = "Synthetic owner A" };
+            var second = new UserTarget { Id = Guid.NewGuid(), Name = "Synthetic owner B" };
+            var session = new FakeSession();
+            var original = session.CallerId;
+            session.Pages.Enqueue(Page(View("Same view name")));
+            session.Pages.Enqueue(Page(View("Same view name")));
+            using (var reader = Reader(session))
+            {
+                var result = reader.Collect(new[] { first, second, first });
+                Assert.Equal(2, session.ViewReads);
+                Assert.Equal(new[] { first.Id, second.Id }, result.Views.Select(v => v.OwnerId));
+                Assert.Equal(new[] { first.Name, second.Name }, result.Views.Select(v => v.OwnerName));
+                Assert.Contains("owner " + first.Name, result.Views[0].ToString());
+                Assert.Contains("owner " + second.Name, result.Views[1].ToString());
+                Assert.All(result.Views, view => Assert.DoesNotContain(view.OwnerId.ToString(), view.ToString()));
+                Assert.Equal(2, session.FetchReads.Count);
+                Assert.Equal(2, result.Outcomes.Count(s => s.Contains("completed;")));
+                Assert.Equal(original, session.CallerId);
+            }
+        }
+
+        [Theory]
+        [InlineData("")]
+        [InlineData("  ")]
+        public void MissingOwnerNameRetainsGuidInViewDisplay(string name)
+        {
+            var user = new UserTarget { Id = Guid.NewGuid(), Name = name };
+            var session = new FakeSession();
+            session.Pages.Enqueue(Page(View("Synthetic view")));
+            using (var reader = Reader(session))
+            {
+                var found = Assert.Single(reader.Collect(new[] { user }).Views);
+                Assert.Contains("owner " + user.Id, found.ToString());
+                Assert.Equal("Synthetic view | " + user.Id + " | 0 findings",
+                    new AnalysisEntry { SourceName = found.Name, Source = found }.ToString());
+            }
+        }
+
+        [Fact]
         public void RepeatedPagingCookieRejectsPartialUser()
         {
             var session = new FakeSession();
@@ -214,6 +441,9 @@ namespace FetchXmlLinter.Host.Tests
                 Assert.Same(candidate, found.Candidate);
                 Assert.Equal(entraId, found.Candidate!.UserId);
                 Assert.Equal("EntraObjectId", found.Candidate.UserIdType);
+                Assert.Equal(user.Name, found.OwnerName);
+                Assert.Contains("owner " + user.Name, found.ToString());
+                Assert.DoesNotContain(user.Id.ToString(), found.ToString());
             }
         }
 
@@ -366,6 +596,8 @@ namespace FetchXmlLinter.Host.Tests
             public Action? AfterViewRead { get; set; }
             public Func<OrganizationRequest, OrganizationResponse>? ExecuteRequest { get; set; }
             public Func<QueryExpression, EntityCollection>? ReadUsers { get; set; }
+            public Func<QueryExpression, EntityCollection>? ReadDefinitions { get; set; }
+            public Func<string, Guid, ColumnSet, Entity>? ReadRecord { get; set; }
 
             public EntityCollection RetrieveMultiple(QueryBase query)
             {
@@ -379,6 +611,8 @@ namespace FetchXmlLinter.Host.Tests
                     return users;
                 }
                 var views = Assert.IsType<QueryExpression>(query);
+                if (views.EntityName.StartsWith("mobileofflineprofile", StringComparison.Ordinal))
+                    return (ReadDefinitions ?? throw new InvalidOperationException("Unexpected offline definition read."))(views);
                 if (views.EntityName == "systemuser")
                     return (ReadUsers ?? throw new InvalidOperationException("Unexpected user directory read."))(views);
                 Assert.Equal("userquery", views.EntityName);
@@ -395,7 +629,8 @@ namespace FetchXmlLinter.Host.Tests
             public Guid Create(Entity entity) => throw new NotSupportedException("Writes must never be called.");
             public void Update(Entity entity) => throw new NotSupportedException("Writes must never be called.");
             public void Delete(string entityName, Guid id) => throw new NotSupportedException("Writes must never be called.");
-            public Entity Retrieve(string entityName, Guid id, ColumnSet columns) => throw new NotSupportedException();
+            public Entity Retrieve(string entityName, Guid id, ColumnSet columns) =>
+                ReadRecord == null ? throw new NotSupportedException() : ReadRecord(entityName, id, columns);
             public OrganizationResponse Execute(OrganizationRequest request) =>
                 ExecuteRequest == null ? throw new NotSupportedException() : ExecuteRequest(request);
             public void Associate(string entityName, Guid id, Relationship relationship, EntityReferenceCollection related) => throw new NotSupportedException();
