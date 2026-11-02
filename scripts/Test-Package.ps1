@@ -12,6 +12,8 @@ try {
     $files = @{
         'docs/README.md' = 'README.md'
         'docs/LICENSE' = 'LICENSE'
+        'docs/LICENSE-MIT-LEGACY' = 'LICENSE-MIT-LEGACY'
+        'docs/LICENSE-LGPL-3.0' = 'LICENSE-LGPL-3.0'
         'docs/THIRD-PARTY-NOTICES.md' = 'THIRD-PARTY-NOTICES.md'
         'assets/icon-80.png' = 'assets\icon-80.png'
     }
@@ -64,6 +66,10 @@ try {
         throw 'The package must depend only on the supported XrmToolBox host.'
     }
     [xml]$properties = Get-Content -LiteralPath (Join-Path $root 'Directory.Build.props') -Raw
+    if ($metadata.license.type -ne 'expression' -or
+        $metadata.license.InnerText -cne [string]$properties.Project.PropertyGroup.PackageLicenseExpression) {
+        throw 'Package license expression differs from the release source.'
+    }
     $version = [string]$properties.Project.PropertyGroup.Version
     if ($metadata.version -cne $version) { throw 'Package version differs from the release source.' }
     $expectedVersion = [version]$version
@@ -73,7 +79,7 @@ try {
         [version][Diagnostics.FileVersionInfo]::GetVersionInfo($temporaryDll).FileVersion -ne $normalizedVersion) {
         throw 'Package, assembly and file versions are not aligned.'
     }
-    Write-Output "Package content, source documents, icon, host dependency and release versions verified: $version"
+    Write-Output "Package content, source documents, license expression, icon, host dependency and release versions verified: $version"
 }
 finally {
     $archive.Dispose()

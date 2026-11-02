@@ -5,7 +5,7 @@
     <version>$version$</version>
     <title>FetchXML Linter</title>
     <authors>jaduplesms</authors>
-    <license type="expression">MIT</license>
+    <license type="expression">GPL-3.0-only</license>
     <readme>docs/README.md</readme>
     <icon>assets/icon-80.png</icon>
     <iconUrl>https://raw.githubusercontent.com/jaduplesms/XrmToolBox-FetchXML-Linter/main/assets/icon-80.png</iconUrl>
@@ -24,6 +24,8 @@
     <file src="src\FetchXmlLinter.XrmToolBox\bin\$configuration$\net48\plugin\FetchXmlLinter.XrmToolBox.dll" target="lib\net48\Plugins" />
     <file src="README.md" target="docs" />
     <file src="LICENSE" target="docs\LICENSE" />
+    <file src="LICENSE-MIT-LEGACY" target="docs\LICENSE-MIT-LEGACY" />
+    <file src="LICENSE-LGPL-3.0" target="docs\LICENSE-LGPL-3.0" />
     <file src="THIRD-PARTY-NOTICES.md" target="docs" />
     <file src="assets\icon-80.png" target="assets" />
   </files>

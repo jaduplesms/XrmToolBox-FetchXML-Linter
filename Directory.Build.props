@@ -9,6 +9,6 @@
     <FileVersion>0.1.0.0</FileVersion>
     <Authors>jaduplesms</Authors>
     <RepositoryUrl>https://github.com/jaduplesms/XrmToolBox-FetchXML-Linter</RepositoryUrl>
-    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageLicenseExpression>GPL-3.0-only</PackageLicenseExpression>
   </PropertyGroup>
 </Project>

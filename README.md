@@ -381,6 +381,24 @@ identifying details from screenshots, logs and reports before submitting them.
 
 ## License
 
-The project's original source is available under the [MIT License](LICENSE).
-XrmToolBox and SDK dependencies retain their respective licenses; see
-[Third-party notices](THIRD-PARTY-NOTICES.md).
+Copyright (c) 2026 Jason du Plessis.
+
+The project is licensed under the [GNU General Public License, version 3 only](LICENSE)
+(`GPL-3.0-only`). Commercial use is permitted. Distributing covered binaries
+requires compliance with GPLv3, including access to the matching Corresponding
+Source and build scripts. Private modifications do not have to be published
+merely because they are used privately.
+
+Before publishing a binary release, make its matching source revision and build
+instructions available and provide a clear source-download link alongside the
+binary download. A link to a private repository is not sufficient for a public
+binary release.
+
+Earlier revisions were offered under MIT. Permissions already granted for those
+copies are not revoked; the [historical MIT notice](LICENSE-MIT-LEGACY) is retained
+for attribution and licensing history, not as an alternative license grant for
+new GPL-only changes.
+
+XrmToolBox, the connection library and SDK dependencies retain their respective
+licenses. The project license does not relicense those dependencies or waive
+their conditions; see [Third-party notices](THIRD-PARTY-NOTICES.md).
